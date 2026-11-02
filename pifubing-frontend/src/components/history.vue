@@ -119,7 +119,8 @@ export default {
           user_id: item.user_id,
         }));
         console.log('获取历史记录成功:', response.data);
-        this.total = response.data.total;
+        // 后端把总数放在 pagination.total 里
+        this.total = response.data.pagination ? response.data.pagination.total : 0;
       }
     } catch (error) {
       console.error('获取历史记录失败:', error);
