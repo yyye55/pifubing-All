@@ -16,7 +16,7 @@ func Authenticate(c *gin.Context) {
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 
 	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "100", "error": "token为空"})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": "token为空"})
 		c.Abort()
 		return
 	}
@@ -28,14 +28,14 @@ func Authenticate(c *gin.Context) {
 
 	if err != nil || !token.Valid {
 		log.Println("Token parsing error:", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "100", "error": "token格式错误、密钥错误或已过期"})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": "token格式错误、密钥错误或已过期"})
 		c.Abort()
 		return
 	}
 
 	// 检查 token 是否在黑名单中
 	if models.IsTokenInBlacklist(tokenString) {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "100", "error": "token已经被撤销"})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": "token已经被撤销"})
 		c.Abort()
 		return
 	}

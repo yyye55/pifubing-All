@@ -8,15 +8,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"io/ioutil"
 	"net/http"
+	"os"
 )
 
 // 获取微信的 session_key 和 openid
 func getWeChatSession(code string) (string, string, error) {
 	// 微信API接口URL
 	apiURL := "https://api.weixin.qq.com/sns/jscode2session"
-	// 你的 appid 和 secret
-	appID := "REDACTED_WECHAT_APP_ID"
-	secret := "REDACTED_WECHAT_APP_SECRET"
+	// appid 和 secret 从环境变量读取，避免把密钥写死在代码里。
+	appID := os.Getenv("WECHAT_APP_ID")
+	secret := os.Getenv("WECHAT_APP_SECRET")
 
 	// 构造请求URL
 	reqURL := fmt.Sprintf("%s?appid=%s&secret=%s&js_code=%s&grant_type=authorization_code", apiURL, appID, secret, code)

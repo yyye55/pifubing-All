@@ -36,6 +36,15 @@ import (
 	"time"
 )
 
+// getEnvOrDefault 读取环境变量，为空时返回默认值。
+// 用于把 AI 服务地址、端口等部署相关配置从代码里挪到环境变量。
+func getEnvOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func GenerateVerificationCode(length int) (string, error) {
 	var code string
 	for i := 0; i < length; i++ {
@@ -84,6 +93,17 @@ func SendEmailHandler(c *gin.Context) {
 			"message": "参数错误",
 			"error":   err.Error(),
 		})
+		return
+	}
+
+	// 去掉邮箱两端的空格，避免生成 Redis key 时带上空白字符。
+	req.To = strings.TrimSpace(req.To)
+	if req.To == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "邮箱不能为空",
+		})
+		return
 	}
 
 	code, err := GenerateVerificationCode(6)
@@ -92,31 +112,50 @@ func SendEmailHandler(c *gin.Context) {
 			"code": 100,
 			"err":  "生成验证码出错",
 		})
+		return
 	}
 
-	//设置验证码的过期时间为当前时间的五分钟
+	// 设置验证码的过期时间为当前时间的五分钟。
 	expirationTime := time.Now().Add(5 * time.Minute)
 
-	//将验证码存入redis,并设置过期时间
-	err = models.Rdb.SetEX(ctx, req.To, code, 5*time.Minute).Err()
-
-	if err != nil {
-		c.JSON(500, gin.H{
+	// 将验证码存入 Redis，并设置过期时间。
+	if err := models.Rdb.SetEX(ctx, req.To, code, 5*time.Minute).Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"code": 100,
 			"err":  "存储验证码失败",
 		})
+		return
 	}
 
-	body := "验证码：" + code + "\n" + "请在五分钟内验证！"
+	// 本地开发模式：把验证码打印到后端控制台，方便没有邮件服务时联调。
+	if strings.EqualFold(os.Getenv("USE_MEMORY_REDIS"), "true") {
+		log.Printf("[开发模式] 邮箱 %s 的验证码：%s", req.To, code)
+	}
 
-	err = sendEmail(req.To, body)
+	// SKIP_EMAIL_SEND=true 时不真正发邮件，只依赖上面的控制台验证码。
+	// 默认 false，保持正常发送邮件的行为。
+	skipEmail := strings.EqualFold(os.Getenv("SKIP_EMAIL_SEND"), "true")
+	if !skipEmail {
+		body := "验证码：" + code + "\n" + "请在五分钟内验证！"
+		if err := sendEmail(req.To, body); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code": 100,
+				"err":  "邮件发送失败：" + err.Error(),
+			})
+			return
+		}
+	}
 
-	c.JSON(200, gin.H{
+	message := "邮件发送成功!"
+	if skipEmail {
+		message = "开发模式：验证码已生成，请查看后端控制台"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
 		"code":           200,
-		"message":        "邮件发送成功!",
+		"message":        message,
 		"expirationTime": expirationTime.Format(time.RFC3339),
 	})
-
 }
 
 var ctx = context.Background()
@@ -158,35 +197,74 @@ type RegisterInput struct {
 func Register(c *gin.Context) {
 	var input RegisterInput
 
-	//绑定表单数据
+	// 绑定表单数据；失败必须 return，否则后面会继续执行并返回两段 JSON。
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"code":  100,
-			"error": err.Error(),
-		})
-	}
-
-	//获取验证码
-	code := input.Code
-	if code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":  100,
-			"error": "验证码不为空",
-		})
-	}
-
-	//验证验证码是否正确
-	_, err := VerifyCode(input.Email, code)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":  100,
 			"error": err.Error(),
 		})
 		return
 	}
 
-	//密码加密
+	// 去掉账号、邮箱等字段两端的空格，密码不做 trim（密码中的空格可能是有意的）。
+	input.Account = strings.TrimSpace(input.Account)
+	input.Email = strings.TrimSpace(input.Email)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Code = strings.TrimSpace(input.Code)
+
+	if input.Account == "" || input.Password == "" || input.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "账号、密码和邮箱不能为空",
+		})
+		return
+	}
+
+	// 获取验证码
+	code := input.Code
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "验证码不为空",
+		})
+		return
+	}
+
+	// 先检查账号是否已存在，避免重复注册。
+	var existing models.User
+	existing.Account = input.Account
+	if err := models.CheckAccount(dao.DB, &existing); err == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "账号已存在",
+		})
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": "查询账号失败",
+		})
+		return
+	}
+
+	// 验证验证码是否正确；验证成功后会删除 Redis 中的验证码。
+	if _, err := VerifyCode(input.Email, code); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// 密码加密；加密失败必须 return，不能继续用空密码注册。
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": "密码加密失败",
+		})
+		return
+	}
 
 	user := models.User{
 		Account:      input.Account,
@@ -198,12 +276,13 @@ func Register(c *gin.Context) {
 		Phone_number: input.Phone_number,
 	}
 
-	//创建用户
+	// 创建用户；数据库失败必须 return。
 	if err := models.CreateUser(dao.DB, &user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":  100,
 			"error": "无法注册用户",
 		})
+		return
 	}
 
 	// 成功响应
@@ -216,6 +295,14 @@ type LoginInput struct {
 }
 
 var JwtKey = []byte("secret_key")
+
+// InitJWTKey 在 main 加载完 .env 之后调用，用环境变量覆盖默认密钥。
+// 不能放在 init() 里，因为 init() 执行时 .env 还没有被 godotenv 读取。
+func InitJWTKey() {
+	if secret := strings.TrimSpace(os.Getenv("JWT_SECRET")); secret != "" {
+		JwtKey = []byte(secret)
+	}
+}
 
 type Claims struct {
 	Account string `json:"account"`
@@ -241,6 +328,7 @@ func Login(c *gin.Context) {
 			"code":  100,
 			"error": "当前用户没有注册",
 		})
+		return
 	}
 
 	//验证密码
@@ -267,7 +355,13 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": "无法生成token"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "登录成功", "token": tokenString})
+	// 前端登录后会把 user_id 存进 localStorage，后续查资料/聊天都用它，必须一起返回。
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "登录成功",
+		"token":   tokenString,
+		"user_id": user.ID,
+	})
 }
 
 type Forget_password_input struct {
@@ -348,6 +442,8 @@ func ParseToken(tokenString string) (int, error) {
 	return 0, errors.New("invalid token")
 }
 
+// ValidateToken 只负责解析 token，不直接写响应。
+// 由调用方统一返回 401，避免 ValidateToken 和 handler 各写一次 JSON。
 func ValidateToken(c *gin.Context) (int, error) {
 	// 获取 Authorization 头部
 	tokenString := c.GetHeader("Authorization")
@@ -355,22 +451,23 @@ func ValidateToken(c *gin.Context) (int, error) {
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 
 	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": "token为空"})
-		c.Abort()
-		return 0, nil
+		return 0, fmt.Errorf("token为空")
 	}
 
 	userID, err := ParseToken(tokenString)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": "token为空"})
-		c.Abort()
-		return 0, err
+		return 0, fmt.Errorf("token无效或已过期")
 	}
 
 	return userID, nil
 }
 
+// UploadToOSS 上传文件并返回可公开访问的 URL。
+// STORAGE_MODE=local 时改为保存到本机 ./uploads 目录，适合没有 OSS 的本地开发/演示环境。
 func UploadToOSS(localFilePath string, ossPath string) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("STORAGE_MODE")), "local") {
+		return saveFileLocally(localFilePath, ossPath)
+	}
 
 	// 从环境变量读取配置
 	OSSEndpoint := os.Getenv("OSS_ENDPOINT")
@@ -400,6 +497,44 @@ func UploadToOSS(localFilePath string, ossPath string) (string, error) {
 	url := fmt.Sprintf("https://%s.%s/%s", OSSBucketName, OSSEndpoint, ossPath)
 
 	return url, nil
+}
+
+// saveFileLocally 把上传文件复制到 ./uploads/<ossPath>，并返回网关上的静态访问地址。
+// ossPath 形如 "2/image/xxx.png"，其中可能带用户输入的文件名，必须清洗后再拼接。
+func saveFileLocally(localFilePath string, ossPath string) (string, error) {
+	// 去掉前导分隔符和 ../，避免路径穿越到 uploads 目录之外。
+	cleanPath := strings.TrimLeft(filepath.ToSlash(ossPath), "/")
+	cleanPath = filepath.Clean(cleanPath)
+	if cleanPath == "." || strings.HasPrefix(cleanPath, "..") {
+		return "", fmt.Errorf("非法的存储路径: %s", ossPath)
+	}
+
+	destPath := filepath.Join("uploads", cleanPath)
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return "", fmt.Errorf("创建上传目录失败: %v", err)
+	}
+
+	src, err := os.Open(localFilePath)
+	if err != nil {
+		return "", fmt.Errorf("打开临时文件失败: %v", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("创建目标文件失败: %v", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return "", fmt.Errorf("保存文件失败: %v", err)
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "http://localhost:9094"
+	}
+	return fmt.Sprintf("%s/uploads/%s", baseURL, filepath.ToSlash(cleanPath)), nil
 }
 
 func CallLargeModelAPIForImageAndZip(filePath string, text string) (string, error) {
@@ -451,8 +586,8 @@ func CallLargeModelAPIForImageAndZip(filePath string, text string) (string, erro
 		return "", fmt.Errorf("关闭 multipart writer 失败: %v", err)
 	}
 
-	// 定义大模型 API 地址
-	apiURL := "http://8.137.81.23:8001/analyze" // 替换为图片预测的实际接口地址
+	// 图片预测服务地址：优先读环境变量，未配置时保持原来的远程地址。
+	apiURL := getEnvOrDefault("AI_IMAGE_API_URL", "http://8.137.81.23:8001/analyze")
 
 	// 创建 HTTP POST 请求
 	req, err := http.NewRequest("POST", apiURL, &body)
@@ -462,7 +597,7 @@ func CallLargeModelAPIForImageAndZip(filePath string, text string) (string, erro
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	// 发送请求
-	client := &http.Client{}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("发送请求失败: %v", err)
@@ -512,8 +647,8 @@ func CallLargeModelAPIForText(conversation ConversationData) (string, error) {
 		return "", fmt.Errorf("关闭 multipart writer 失败: %v", err)
 	}
 
-	// 定义大模型 API 地址
-	apiURL := "http://8.137.81.23:8001/process_text" // 替换为文字描述的实际接口地址
+	// 文字诊断服务地址：优先读环境变量，未配置时保持原来的远程地址。
+	apiURL := getEnvOrDefault("AI_TEXT_API_URL", "http://8.137.81.23:8001/process_text")
 
 	// 创建 HTTP POST 请求
 	req, err := http.NewRequest("POST", apiURL, &body)
@@ -523,7 +658,7 @@ func CallLargeModelAPIForText(conversation ConversationData) (string, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	// 发送请求
-	client := &http.Client{}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("发送请求失败: %v", err)
@@ -557,7 +692,7 @@ func saveImageMessageAsync(saveResponse *models.Response) {
 	go func() {
 		//异步保存数据到数据库
 		if dbErr := models.SaveToDataBase(dao.DB, saveResponse); dbErr != nil {
-			log.Println("保存到数据库失败%v", dbErr)
+			log.Printf("保存到数据库失败: %v", dbErr)
 		} else {
 			log.Println("保存成功！")
 		}
@@ -581,7 +716,7 @@ type ModelResponse struct {
 //func PredictImage(c *gin.Context) {
 //	userID, err := ValidateToken(c)
 //	if err != nil {
-//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 //		return
 //	}
 //	var localFilePath string
@@ -821,7 +956,7 @@ type Check_image_ask_messages_input struct {
 func Check_image_ask_messages(c *gin.Context) {
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -829,6 +964,14 @@ func Check_image_ask_messages(c *gin.Context) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	size, _ := strconv.Atoi(c.Query("size"))
 	chat_id, _ := strconv.Atoi(c.Query("chat_id"))
+
+	// 未传分页参数时给默认值，避免 total_page 出现除以 0 的异常结果。
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 10
+	}
 
 	input := Check_image_ask_messages_input{
 		User_id: userID,
@@ -868,7 +1011,7 @@ type Chat_input struct {
 func Create_chat(c *gin.Context) {
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -890,6 +1033,7 @@ func Create_chat(c *gin.Context) {
 			"code":  100,
 			"error": "无法创建个人聊天框",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -962,7 +1106,7 @@ func Check_chat(c *gin.Context) {
 func Update_chat(c *gin.Context) {
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -984,6 +1128,7 @@ func Update_chat(c *gin.Context) {
 			"code":  100,
 			"error": "无法修改个人聊天框名称",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1001,7 +1146,7 @@ type Delete_Chat_input struct {
 func Delete_chat(c *gin.Context) {
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -1027,6 +1172,7 @@ func Delete_chat(c *gin.Context) {
 			"code":  100,
 			"error": "无法删除个人聊天框名称",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1036,17 +1182,15 @@ func Delete_chat(c *gin.Context) {
 
 }
 
-// 阿里云短信配置
-const (
-	AccessKeyID     = "REDACTED_ALIYUN_ACCESS_KEY_ID"
-	AccessKeySecret = "REDACTED_ALIYUN_ACCESS_KEY_SECRET"
-	SignName        = "AI皮肤病顾问"        // 短信签名
-	TemplateCode    = "SMS_478510736 " // 短信模板
-)
-
-// 发送短信验证码的函数
+// 发送短信验证码的函数。
+// AccessKey 等敏感信息改为从环境变量读取，避免把密钥写死在代码里。
 func sendSms(phoneNumber, code string) error {
-	client, err := dysmsapi.NewClientWithAccessKey("cn-hangzhou", AccessKeyID, AccessKeySecret)
+	accessKeyID := os.Getenv("SMS_ACCESS_KEY_ID")
+	accessKeySecret := os.Getenv("SMS_ACCESS_KEY_SECRET")
+	signName := os.Getenv("SMS_SIGN_NAME")
+	templateCode := os.Getenv("SMS_TEMPLATE_CODE")
+
+	client, err := dysmsapi.NewClientWithAccessKey("cn-hangzhou", accessKeyID, accessKeySecret)
 	if err != nil {
 		return err
 	}
@@ -1054,8 +1198,8 @@ func sendSms(phoneNumber, code string) error {
 	request := dysmsapi.CreateSendSmsRequest()
 	request.Scheme = "https"
 	request.PhoneNumbers = phoneNumber
-	request.SignName = SignName
-	request.TemplateCode = TemplateCode
+	request.SignName = signName
+	request.TemplateCode = templateCode
 	request.TemplateParam = fmt.Sprintf("{\"code\":\"%s\"}", code)
 
 	// 发送请求
@@ -1088,6 +1232,7 @@ func SMS_verification(c *gin.Context) {
 			"code": 100,
 			"err":  "生成验证码出错",
 		})
+		return
 	}
 
 	//将验证码存入redis,并设置过期时间
@@ -1098,6 +1243,7 @@ func SMS_verification(c *gin.Context) {
 			"code": 100,
 			"err":  "存储验证码失败",
 		})
+		return
 	}
 
 	// 调用发送短信函数
@@ -1118,7 +1264,7 @@ func Updates_avatar(c *gin.Context) {
 	var input Users_avatar
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -1157,6 +1303,7 @@ func Updates_avatar(c *gin.Context) {
 			"code":  100,
 			"error": "无法更新头像框",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1183,7 +1330,7 @@ func Check_users_information(c *gin.Context) {
 	var input Users_all_information
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -1192,6 +1339,7 @@ func Check_users_information(c *gin.Context) {
 			"code":  100,
 			"error": "无法查询个人信息",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1215,7 +1363,7 @@ func Updates_users_information(c *gin.Context) {
 	var input Users_information
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -1225,6 +1373,7 @@ func Updates_users_information(c *gin.Context) {
 			"code":  100,
 			"error": err.Error(),
 		})
+		return
 	}
 
 	if err := models.Update_users_information(dao.DB, (*models.Users_information)(&input), userID); err != nil {
@@ -1232,6 +1381,7 @@ func Updates_users_information(c *gin.Context) {
 			"code":  100,
 			"error": "无法更新个人信息",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1250,7 +1400,7 @@ func Create_disease_information(c *gin.Context) {
 	var input Disease_information
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 
@@ -1260,6 +1410,7 @@ func Create_disease_information(c *gin.Context) {
 			"code":  100,
 			"error": err.Error(),
 		})
+		return
 	}
 
 	if err := models.Update_disease_information(dao.DB, (*models.Disease_information)(&input), userID); err != nil {
@@ -1267,6 +1418,7 @@ func Create_disease_information(c *gin.Context) {
 			"code":  100,
 			"error": "无法创建个人信息病史，过敏情况",
 		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1622,7 +1774,7 @@ type BaseResponse struct {
 //func Ceshi(c *gin.Context) {
 //	userID, err := ValidateToken(c)
 //	if err != nil {
-//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 //		return
 //	}
 //
@@ -1830,7 +1982,7 @@ type BaseResponse struct {
 //func Ceshi(c *gin.Context) {
 //	userID, err := ValidateToken(c)
 //	if err != nil {
-//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 //		return
 //	}
 //
@@ -2039,7 +2191,7 @@ type BaseResponse struct {
 //	// 验证用户身份
 //	userID, err := ValidateToken(c)
 //	if err != nil {
-//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+//		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 //		return
 //	}
 //
@@ -2192,7 +2344,7 @@ func closeSSE(chatID int) {
 func PredictImage(c *gin.Context) {
 	userID, err := ValidateToken(c)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err})
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
 	var localFilePath string
@@ -2398,4 +2550,77 @@ func PredictText(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": err.Error()})
 		return
 	}
+}
+
+// PredictOnlyText 处理“只输入文字、不上传图片”的问诊。
+// 前端 home.vue 用 GET /predict/only/text?conversation=...&chat_id=... 调用，
+// 期望返回 {code:200, data:{response:"..."}}。
+func PredictOnlyText(c *gin.Context) {
+	userID, err := ValidateToken(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	conversation := strings.TrimSpace(c.Query("conversation"))
+	if conversation == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "conversation 不能为空"})
+		return
+	}
+	chatID, _ := strconv.Atoi(c.Query("chat_id"))
+
+	// 把用户的病史、过敏情况一起带给大模型，回答才会因人而异。
+	var user models.Disease_information
+	if err := dao.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 100, "error": "用户信息未找到"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "查询用户信息失败"})
+		}
+		return
+	}
+
+	fullConversation := "Q: " + conversation
+	fullConversation += "\n我的患病史: " + user.Medical_history
+	fullConversation += "\n过敏情况: " + user.Allergies
+
+	modelResponse, err := CallLargeModelAPIForText(ConversationData{
+		Conversation: fullConversation,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": fmt.Sprintf("调用文字描述大模型接口失败：%v", err),
+		})
+		return
+	}
+
+	var responseForText ModelResponse
+	if err := json.Unmarshal([]byte(modelResponse), &responseForText); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "解析文字描述响应失败"})
+		return
+	}
+
+	// 保存本次问答，历史记录页面才能看到纯文字问诊。
+	saveImageMessageAsync(&models.Response{
+		Chat_id:    chatID,
+		User_id:    userID,
+		Ask:        conversation,
+		Type:       responseForText.PredictedClass,
+		Message:    responseForText.GeneratedText,
+		Confidence: fmt.Sprintf("%.2f", responseForText.Confidence),
+	})
+
+	conversationKey := fmt.Sprintf("conversation:%d", userID)
+	currentMessage := fmt.Sprintf("Q: %s\nA: %s", conversation, responseForText.GeneratedText)
+	if err := models.Rdb.RPush(ctx, conversationKey, currentMessage).Err(); err == nil {
+		models.Rdb.LTrim(ctx, conversationKey, -2, -1)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"response": responseForText.GeneratedText,
+		},
+	})
 }

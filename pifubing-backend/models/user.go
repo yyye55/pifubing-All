@@ -31,11 +31,11 @@ func CreateUser(db *gorm.DB, user *User) error {
 }
 
 func CheckAccount(db *gorm.DB, user *User) error {
-	if err := db.Where("account = ?", user.Account).First(&user).Error; err != nil {
+	// user 本身已经是指针，不能再取地址，否则会变成 **User，GORM 无法扫描结果。
+	if err := db.Where("account = ?", user.Account).First(user).Error; err != nil {
 		return err
-	} else {
-		return nil
 	}
+	return nil
 }
 
 type Disease_information struct {

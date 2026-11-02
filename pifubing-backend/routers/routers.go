@@ -9,6 +9,9 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
 	r.Use(middlewares.CORSMiddleware())
+
+	// STORAGE_MODE=local 时，上传的图片保存在 ./uploads，通过该静态路由访问。
+	r.Static("/uploads", "./uploads")
 	//r.POST("/oss", controller.Oss)
 
 	r.POST("/sms_verification", controller.SMS_verification)
@@ -33,6 +36,8 @@ func SetupRouter() *gin.Engine {
 
 	//调用deepseek形成诊疗方案
 	r.GET("/predict/text", controller.PredictText)
+	//仅文字问诊（不上传图片）
+	r.GET("/predict/only/text", controller.PredictOnlyText)
 	// 创建学生相关的路由组
 	studentsGroup := r.Group("/users")
 	studentsGroup.Use(middlewares.Authenticate) // 为学生相关路由组添加公共的中间件
