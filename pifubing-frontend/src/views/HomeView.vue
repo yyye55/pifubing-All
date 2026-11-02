@@ -35,7 +35,7 @@ const handleLogin = async () => {
     formError.value = ''; // 清空错误消息
     loading.value = true; // 开始加载
     try {
-        const response = await axios.post('http://8.137.81.23:9094/users/login', {
+        const response = await axios.post('/users/login', {
             account: account.value,
             password: password.value,
             headers: {
@@ -84,7 +84,7 @@ const formData = ref({
 const loadUserData = async (token) => {  // renamed function
   try {
     const response = await axios.get(
-      'http://8.137.81.23:9094/users/check_users_information',
+      '/users/check_users_information',
       {
         headers: {
           Authorization: `Bearer ${token}`  // 将 Bearer token 包含在请求头中

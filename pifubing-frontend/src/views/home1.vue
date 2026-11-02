@@ -158,7 +158,7 @@ export default {
 
       try {
         this.isAnalyzing = true;
-        const response = await axios.post(`http://8.137.81.23:9094/users/image/ask`, formData, {
+        const response = await axios.post(`/users/image/ask`, formData, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -207,7 +207,7 @@ async handleChat(event) {
   try {
     this.isChatting = true; // 正在发送请求
     const response = await axios.post(
-      `http://8.137.81.23:9094/users/ask`,
+      `/users/ask`,
       { ask: content },
       { headers: { Authorization: `Bearer ${token}` } }
     );

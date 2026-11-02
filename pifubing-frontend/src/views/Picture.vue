@@ -42,7 +42,7 @@ const fetchData = async () => {
       'Content-Type': 'multipart/form-data'
     };
 
-    const response = await axios.get('http://8.137.81.23:9094/users/Check/Images_Description', { headers });
+    const response = await axios.get('/users/Check/Images_Description', { headers });
     console.log('请求数据成功', response.data);
 
     if (response.data.code === 200) {

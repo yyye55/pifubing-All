@@ -37,7 +37,7 @@ const handleSendVerificationCode = async () => {
   sendingCode.value = true;
 
   try {
-    const response = await axios.post(`http://8.137.81.23:9094/send_email`, {
+    const response = await axios.post(`/send_email`, {
       to: email.value,
     });
 
@@ -67,14 +67,15 @@ const handleSubmit = async () => {
   }
 
   try {
-    const response = await axios.post(`http://8.137.81.23:9094/users/register`, {
+    const response = await axios.post(`/users/register`, {
       account: account.value,
       password: password.value,
       email: email.value,
       code: verificationCode.value,
       name: name.value,
       gender: gender.value,
-      age: age.value,
+      // 后端 age 是 int，输入框即使为空也必须传数字，否则 JSON 绑定会报错。
+      age: age.value === '' ? 0 : Number(age.value),
       phone_number:phone_number.value,  // 新增字段
 
     });
@@ -131,13 +132,13 @@ const handleSubmit = async () => {
                      <!-- 年纪-->
           <div class="input-box">
             <span class="icon"><ion-icon name="lock-open-outline"></ion-icon></span>
-            <input type="age" v-model="age" required />
+            <input type="number" v-model.number="age" min="0" max="150" required />
             <label>年龄</label>
           </div>
 
           <div class="input-box">
             <span class="icon"><ion-icon name="phone-portrait-outline"></ion-icon></span>
-            <input type="phone_number" v-model="phone_number" required />
+            <input type="tel" v-model="phone_number" required />
             <label>手机号</label>
           </div>
 

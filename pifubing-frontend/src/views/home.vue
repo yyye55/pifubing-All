@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { marked } from 'marked';
 import MyComponent from '../components/history.vue';
+import { API_BASE } from '../apiBase';
 
 // 定义全局变量
 window.globalState = {
@@ -232,7 +233,7 @@ export default {
 
       if (this.selectedImage) {
         // 仅图片 或 文本 + 图片 → 仍然 POST 到 users/predict/image
-        apiUrl = "http://8.137.81.23:9094/users/predict/image";
+        apiUrl = "/users/predict/image";
 
         formData.append("conversation", textOnly || "如何治疗？");
         formData.append("chat_id", this.chatId || 0);
@@ -245,7 +246,7 @@ export default {
         }
       } else {
         // 仅文本 → GET 请求到 only/text
-        apiUrl = "http://8.137.81.23:9094/predict/only/text";
+        apiUrl = "/predict/only/text";
         requestData = {
           conversation: textOnly,
           chat_id: this.chatId,
@@ -337,7 +338,7 @@ const requestData = {
             const jsonString = JSON.stringify(requestData);
             const base64Data = btoa(unescape(encodeURIComponent(jsonString)));
             const eventSource = new EventSource(
-              `http://8.137.81.23:9094/predict/text?data=${encodeURIComponent(base64Data)}&model=DeepSeek-R1`
+              `${API_BASE}/predict/text?data=${encodeURIComponent(base64Data)}&model=DeepSeek-R1`
             );
 
             eventSource.addEventListener("message", (event) => {
@@ -422,7 +423,7 @@ const requestData = {
   },
   async fetchChatMessages(chatId) {
   try {
-    const response = await axios.get('http://8.137.81.23:9094/users/Check_image_ask_messages', {
+    const response = await axios.get('/users/Check_image_ask_messages', {
       params: { chat_id: chatId, page: 1, size: 10 },
       headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     });

@@ -1,0 +1,25 @@
+# Python 3.10 环境依赖
+# 安装：pip install -r requirements.txt
+
+# Web 服务
+fastapi==0.115.0
+uvicorn==0.30.6
+python-multipart==0.0.12
+python-dotenv==1.0.1
+
+# 图片分类（torch 建议按本机 CPU/CUDA 版本单独安装，见 README）
+torch>=2.0
+torchvision>=0.15
+opencv-python==4.13.0.92
+pillow==12.3.0
+numpy==1.26.4
+
+# 知识库检索
+pandas==2.2.3
+openpyxl==3.1.5
+faiss-cpu==1.9.0.post1
+transformers==4.46.3
+
+# 大模型
+langchain==0.3.7
+langchain-openai==0.2.8

@@ -16,6 +16,8 @@ pifubing-backend/*.sqlite3
 pifubing-backend/*.log
 pifubing-backend/temp/
 pifubing-backend/avatar_temp/
+# 本地存储模式下用户上传的图片
+pifubing-backend/uploads/
 pifubing-backend/temp_images/
 pifubing-backend/temp_files/
 # 旧版本编译产物和联调临时文件，不进入仓库

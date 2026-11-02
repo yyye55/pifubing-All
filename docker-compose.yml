@@ -1,0 +1,70 @@
+# 云服务器一键部署：docker compose up -d --build
+# 使用前复制 deploy.env.example 为 .env 并填写域名与密钥。
+services:
+  backend:
+    build: ./pifubing-backend
+    restart: unless-stopped
+    environment:
+      PORT: "9094"
+      DB_DRIVER: sqlite
+      SQLITE_PATH: /data/skin_disease.db
+      AUTO_MIGRATE: "true"
+      USE_MEMORY_REDIS: "true"
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      STORAGE_MODE: local
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      AI_IMAGE_API_URL: ${AI_IMAGE_API_URL:-http://ai:8001/analyze}
+      AI_TEXT_API_URL: ${AI_TEXT_API_URL:-http://ai:8001/process_text}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-smtp.qq.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      EMAIL_SUBJECT: ${EMAIL_SUBJECT:-慧语星河-AI皮肤病医疗顾问}
+      SKIP_EMAIL_SEND: ${SKIP_EMAIL_SEND:-false}
+      API_KEY: ${API_KEY:-}
+      DeepSeek_R1_STUDIO_API_KEY: ${DeepSeek_R1_STUDIO_API_KEY:-}
+      DeepSeek_V3_STUDIO_API_KEY: ${DeepSeek_V3_STUDIO_API_KEY:-}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
+      OSS_BUCKET_NAME: ${OSS_BUCKET_NAME:-}
+    volumes:
+      - backend_data:/data
+      - backend_uploads:/app/uploads
+    ports:
+      - "9094:9094"
+    depends_on:
+      - ai
+
+  ai:
+    build: ./pifubing-pythonCode
+    restart: unless-stopped
+    environment:
+      PORT: "8001"
+      MODEL_CHECKPOINT: /app/B3_Transformer.pth
+      EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-}
+      FAISS_INDEX_FOLDER: /app/faiss_index
+      DATA_FILE_PATH: ${DATA_FILE_PATH:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://aistudio.baidu.com/llm/lmapi/v3}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-r1}
+    volumes:
+      - ./pifubing-pythonCode/faiss_index:/app/faiss_index
+      - ${AI_DATA_DIR:-./ai-data}:/app/data:ro
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./pifubing-frontend
+      args:
+        VITE_API_BASE: /api
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  backend_data:
+  backend_uploads:

@@ -78,7 +78,7 @@ const loadUserData = async () => {  // renamed function
       return;
     }
     const response = await axios.get(
-      'http://8.137.81.23:9094/users/check_users_information',
+      '/users/check_users_information',
       {
         headers: {
           Authorization: `Bearer ${token}`  // 将 Bearer token 包含在请求头中
@@ -142,7 +142,7 @@ const submitForm = async () => {
     console.log('提交的数据：', formDataToSubmit);
 
     const response = await axios.post(
-      'http://8.137.81.23:9094/users/updates_users_information',  // 更新个人信息的接口
+      '/users/updates_users_information',  // 更新个人信息的接口
       formDataToSubmit,  // 提交的 formData 数据
       {
         headers: {
@@ -173,7 +173,7 @@ const submitForm = async () => {
 const submitDiseaseInfo = async () => {
   try {
     const response = await axios.post(
-      'http://8.137.81.23:9094/users/create_disease_information',
+      '/users/create_disease_information',
       {
         medical_history: formData.value.medicalHistory,
         allergies: formData.value.allergyHistory
@@ -233,7 +233,7 @@ const handleAvatarChange = async (event) => {
       }
 
       const response = await axios.post(
-        'http://8.137.81.23:9094/users/updates_avatar', // 头像更新的接口
+        '/users/updates_avatar', // 头像更新的接口
         formData,
         {
           headers: {
@@ -281,7 +281,7 @@ const loadMedicalHistory = async () => {
       return;
     }
     const response = await axios.get(
-      'http://8.137.81.23:9094/users/check_users_history',  // New API endpoint
+      '/users/check_users_history',  // New API endpoint
       {
         headers: {
           Authorization: `Bearer ${token}`,  // Include token in the request header

@@ -107,7 +107,7 @@ export default {
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
-      const response = await axios.get('http://8.137.81.23:9094/users/Check_chat', {
+      const response = await axios.get('/users/Check_chat', {
         headers: { Authorization: `Bearer ${token}` },
         params: { page: this.page, size: this.pageSize }
       });
@@ -130,7 +130,7 @@ export default {
     // 获取单个聊天框的所有内容
     async fetchChatMessages(chatId) {
       try {
-        const response = await axios.get('http://8.137.81.23:9094/users/Check_image_ask_messages', {
+        const response = await axios.get('/users/Check_image_ask_messages', {
           params: { chat_id: chatId, page: 1, size: 10 },
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         });
@@ -150,7 +150,7 @@ export default {
  // 创建聊天框
  async createChat() {
     try {
-      const url = 'http://8.137.81.23:9094/users/Create_chat';
+      const url = '/users/Create_chat';
       const method = 'POST';
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
       const data = { name: '新对话' };
@@ -192,7 +192,7 @@ export default {
         );
 
         if (confirm === 'confirm') {
-          const response = await axios.delete('http://8.137.81.23:9094/users/Delete_chat', {
+          const response = await axios.delete('/users/Delete_chat', {
             params: { chat_id: chatId },
             headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           });
@@ -236,7 +236,7 @@ export default {
       if (this.editedChatName) {
         try {
           const response = await axios.post(
-            'http://8.137.81.23:9094/users/Update_chat',
+            '/users/Update_chat',
             { id: chatId, name: this.editedChatName },
             { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
           );

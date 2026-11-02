@@ -1,0 +1,13 @@
+.env
+*.log
+*.db
+*.sqlite
+*.sqlite3
+SkinDisease
+SkinDisease.exe
+uploads/
+temp/
+avatar_temp/
+temp_images/
+temp_files/
+.idea/

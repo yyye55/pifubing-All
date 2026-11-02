@@ -34,7 +34,7 @@ const handleSendVerificationCode = async () => {
   sendingCode.value = true;
 
   try {
-    const response = await axios.post(`http://8.137.81.23:9094/send_email`, {
+    const response = await axios.post(`/send_email`, {
       to: email.value,
     });
 
@@ -89,7 +89,7 @@ const handleSubmit = async () => {
 
   try {
     // 提交表单
-    const response = await axios.post(`http://8.137.81.23/users/forget/password`, {
+    const response = await axios.post(`/users/forget/password`, {
       account: account.value,
       password: password.value,
       email: email.value,
