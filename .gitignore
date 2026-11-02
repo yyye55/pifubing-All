@@ -1,0 +1,58 @@
+# ===== 环境变量与密钥 =====
+# 真实的 .env 只保留在本地，绝不能提交到 GitHub
+.env
+.env.*
+!.env.example
+!*.env.example
+# 前端开发环境地址不含密钥，可以提交
+!pifubing-frontend/.env.development
+
+# ===== Go 后端 =====
+pifubing-backend/.idea/
+pifubing-backend/*.iml
+pifubing-backend/*.db
+pifubing-backend/*.sqlite
+pifubing-backend/*.sqlite3
+pifubing-backend/*.log
+pifubing-backend/temp/
+pifubing-backend/avatar_temp/
+pifubing-backend/temp_images/
+pifubing-backend/temp_files/
+# 旧版本编译产物和联调临时文件，不进入仓库
+pifubing-backend/SkinDisease
+pifubing-backend/SkinDisease.exe
+pifubing-backend/*.exe
+pifubing-backend/tempcehsi*.png
+pifubing-backend/uploaded_urls.txt
+
+# ===== 前端 =====
+pifubing-frontend/node_modules/
+pifubing-frontend/dist/
+pifubing-frontend/dist-ssr/
+pifubing-frontend/*.local
+pifubing-frontend/vite.config.js.timestamp-*
+pifubing-frontend/.vite/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+pifubing-pythonCode/temp_files/
+pifubing-pythonCode/temp_images/
+pifubing-pythonCode/*.log
+
+# ===== 编辑器 / 系统 =====
+.idea/
+.vscode/
+*.suo
+*.sw?
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 日志与临时文件 =====
+*.log
+*.tmp
