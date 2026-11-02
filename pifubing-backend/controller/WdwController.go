@@ -294,14 +294,26 @@ type LoginInput struct {
 	Password string `json:"password"`
 }
 
-var JwtKey = []byte("secret_key")
+// JwtKey 由 InitJWTKey 在启动时设置，不再硬编码固定密钥。
+var JwtKey []byte
 
-// InitJWTKey 在 main 加载完 .env 之后调用，用环境变量覆盖默认密钥。
+// InitJWTKey 在 main 加载完 .env 之后调用，用环境变量设置签名密钥。
 // 不能放在 init() 里，因为 init() 执行时 .env 还没有被 godotenv 读取。
 func InitJWTKey() {
-	if secret := strings.TrimSpace(os.Getenv("JWT_SECRET")); secret != "" {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret != "" {
 		JwtKey = []byte(secret)
+		return
 	}
+
+	// 未配置密钥时随机生成，避免使用代码里的固定弱密钥。
+	randomKey := make([]byte, 32)
+	if _, err := rand.Read(randomKey); err == nil {
+		JwtKey = randomKey
+		log.Println("警告: 未配置 JWT_SECRET，已生成临时密钥；重启后已有 token 会失效")
+		return
+	}
+	log.Println("警告: 未配置 JWT_SECRET 且随机密钥生成失败，请尽快在 .env 中配置")
 }
 
 type Claims struct {
