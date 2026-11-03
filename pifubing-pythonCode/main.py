@@ -275,9 +275,10 @@ async def generate_response(
         predicted_class: str = Form(...),
         confidence: float = Form(...)
 ):
-    """文字问诊接口：检索知识库 + 调用大模型生成回答。
+    """文字问诊接口：检索知识库并返回分类结果与检索内容。
 
-    未配置知识库时仍可调用大模型（只基于用户描述），保证服务可用。
+    比赛演示阶段暂不调用大模型：仅做知识库检索，直接返回分类结果与检索内容，
+    避免未配置 LLM_API_KEY 时接口直接返回 500。
     """
     try:
         # 根据置信度计算权重
@@ -296,37 +297,38 @@ async def generate_response(
         name_info = retrieve_information(search_engine, predicted_class)
         desc_info = retrieve_information(search, conversation, k=2)
 
-        if not CONFIG["api_key"]:
-            return JSONResponse(status_code=500, content={"error": "未配置 LLM_API_KEY，无法调用大模型"})
+        # ===== 以下大模型调用代码暂时注释，需要时去掉注释即可恢复 =====
+        # if not CONFIG["api_key"]:
+        #     return JSONResponse(status_code=500, content={"error": "未配置 LLM_API_KEY，无法调用大模型"})
 
-        # 初始化大模型
-        chat = ChatOpenAI(
-            api_key=CONFIG["api_key"],
-            base_url=CONFIG["base_url"],
-            model=CONFIG["model_name"],
-            streaming=True
-        )
+        # # 初始化大模型
+        # chat = ChatOpenAI(
+        #     api_key=CONFIG["api_key"],
+        #     base_url=CONFIG["base_url"],
+        #     model=CONFIG["model_name"],
+        #     streaming=True
+        # )
 
-        # 生成回复
-        system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
-        response = call_llm(
-            chat=chat,
-            system_message=system_message,
-            name_info=name_info,
-            desc_info=desc_info,
-            question=conversation,
-            predicted_class=predicted_class,
-            confidence=confidence,
-            weight=weight
-        )
+        # # 生成回复
+        # system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
+        # response = call_llm(
+        #     chat=chat,
+        #     system_message=system_message,
+        #     name_info=name_info,
+        #     desc_info=desc_info,
+        #     question=conversation,
+        #     predicted_class=predicted_class,
+        #     confidence=confidence,
+        #     weight=weight
+        # )
 
-        if not response:
-            return JSONResponse(status_code=500, content={"error": "生成回复失败"})
+        # if not response:
+        #     return JSONResponse(status_code=500, content={"error": "生成回复失败"})
 
         return {
-            "generated_text": response,
             "predicted_class": predicted_class,
-            "confidence": confidence,
+            "result_search": name_info,
+            "desc_search": desc_info,
         }
     except Exception as e:
         logging.error(f"生成接口错误: {str(e)}")
