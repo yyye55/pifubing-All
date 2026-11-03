@@ -45,6 +45,14 @@ env/
 pifubing-pythonCode/temp_files/
 pifubing-pythonCode/temp_images/
 pifubing-pythonCode/*.log
+# 本地生成的 FAISS 向量索引（可由 Excel 自动重建，不入库）
+pifubing-pythonCode/faiss_index/
+# 本地模拟数据，仅用于调试检索链路
+pifubing-pythonCode/mock_data/
+# 本地校验脚本与备份文件
+pifubing-pythonCode/check_kb.py
+pifubing-pythonCode/check_model.py
+pifubing-pythonCode/*.bak
 
 # ===== 编辑器 / 系统 =====
 .idea/
