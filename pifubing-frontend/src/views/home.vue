@@ -565,6 +565,8 @@ const requestData = {
 </div>
 </div>
 </div>
+    <!-- 免责声明 -->
+    <p class="disclaimer">以上内容仅供学习参考，不构成医疗诊断。如有不适请及时就医并遵医嘱。</p>
   </main>
 </template>
 
@@ -1116,5 +1118,11 @@ input[type="submit"]:hover {
 
 }
 
+.disclaimer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 12px 0 16px;
+}
 
 </style>
