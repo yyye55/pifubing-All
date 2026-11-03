@@ -26,6 +26,7 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/smtp"
@@ -69,10 +70,14 @@ func sendEmail(to string, body string) error {
 	smtpPort := os.Getenv("SMTP_PORT")
 	subject := os.Getenv("EMAIL_SUBJECT")
 
-	// 构造邮件内容
+	// 构造邮件内容：主题按 RFC 2047 编码为 UTF-8，正文声明 UTF-8 字符集，
+	// 避免部分邮件客户端把中文标题和验证码显示成乱码。
 	message := []byte("From: " + from + "\r\n" +
 		"To: " + to + "\r\n" +
-		"Subject: " + subject + "\r\n" +
+		"Subject: " + mime.QEncoding.Encode("UTF-8", subject) + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=UTF-8\r\n" +
+		"Content-Transfer-Encoding: 8bit\r\n" +
 		"\r\n" + body + "\r\n")
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
@@ -136,7 +141,7 @@ func SendEmailHandler(c *gin.Context) {
 	// 默认 false，保持正常发送邮件的行为。
 	skipEmail := strings.EqualFold(os.Getenv("SKIP_EMAIL_SEND"), "true")
 	if !skipEmail {
-		body := "验证码：" + code + "\n" + "请在五分钟内验证！"
+		body := "您的注册验证码是：" + code + "\n\n验证码 5 分钟内有效，请尽快完成验证。\n如非本人操作，请忽略此邮件。"
 		if err := sendEmail(req.To, body); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code": 100,

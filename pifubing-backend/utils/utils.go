@@ -66,10 +66,10 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 		return "", fmt.Errorf("AI_STUDIO_API_KEY environment variable not set")
 	}
 
-	url := "https://aistudio.baidu.com/llm/lmapi/v3/chat/completions"
+	url := "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 	requestBody := CompletionRequest{
-		Model: "deepseek-r1",
+		Model: "glm-4-flash",
 		Messages: []Message{
 			{Role: "system", Content: "你现在是一个专业的皮肤科医生，请结合一下内容生成专业的治疗方案"},
 			{Role: "user", Content: fullConversation},

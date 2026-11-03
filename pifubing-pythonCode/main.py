@@ -297,38 +297,45 @@ async def generate_response(
         name_info = retrieve_information(search_engine, predicted_class)
         desc_info = retrieve_information(search, conversation, k=2)
 
-        # ===== 以下大模型调用代码暂时注释，需要时去掉注释即可恢复 =====
-        # if not CONFIG["api_key"]:
-        #     return JSONResponse(status_code=500, content={"error": "未配置 LLM_API_KEY，无法调用大模型"})
+        # ===== 大模型调用：未配置 API Key 或调用失败时降级为仅返回检索结果 =====
+        generated_text = ""
+        if not CONFIG["api_key"]:
+            logging.warning("未配置 LLM_API_KEY，仅返回知识库检索结果")
+        else:
+            try:
+                # 初始化大模型
+                chat = ChatOpenAI(
+                    api_key=CONFIG["api_key"],
+                    base_url=CONFIG["base_url"],
+                    model=CONFIG["model_name"],
+                    streaming=True
+                )
 
-        # # 初始化大模型
-        # chat = ChatOpenAI(
-        #     api_key=CONFIG["api_key"],
-        #     base_url=CONFIG["base_url"],
-        #     model=CONFIG["model_name"],
-        #     streaming=True
-        # )
+                # 生成回复
+                system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
+                response = call_llm(
+                    chat=chat,
+                    system_message=system_message,
+                    name_info=name_info,
+                    desc_info=desc_info,
+                    question=conversation,
+                    predicted_class=predicted_class,
+                    confidence=confidence,
+                    weight=weight
+                )
 
-        # # 生成回复
-        # system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
-        # response = call_llm(
-        #     chat=chat,
-        #     system_message=system_message,
-        #     name_info=name_info,
-        #     desc_info=desc_info,
-        #     question=conversation,
-        #     predicted_class=predicted_class,
-        #     confidence=confidence,
-        #     weight=weight
-        # )
-
-        # if not response:
-        #     return JSONResponse(status_code=500, content={"error": "生成回复失败"})
+                if response:
+                    generated_text = response
+                else:
+                    logging.warning("大模型未返回内容，降级为仅返回知识库检索结果")
+            except Exception as e:
+                logging.error(f"大模型调用异常，降级为仅返回知识库检索结果: {e}")
 
         return {
             "predicted_class": predicted_class,
             "result_search": name_info,
             "desc_search": desc_info,
+            "generated_text": generated_text,
         }
     except Exception as e:
         logging.error(f"生成接口错误: {str(e)}")
