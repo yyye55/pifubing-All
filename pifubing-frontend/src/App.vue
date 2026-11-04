@@ -1,17 +1,15 @@
 <script setup>
-import { RouterLink, RouterView } from 'vue-router'
-import HelloWorld from './components/HelloWorld.vue'
+import { RouterView } from 'vue-router'
 </script>
 
 <template>
- 
-  <RouterView />
+  <div class="ai-app">
+    <RouterView />
+  </div>
 </template>
 
 <style scoped>
-body{
-  background-image: url("new4.jpg");
-  background-size: cover;
-  height: 10vh;
+.ai-app {
+  min-height: 100vh;
 }
 </style>

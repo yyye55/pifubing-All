@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" role="img" aria-label="体癣医学示意图">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fcfa"/>
+      <stop offset="0.55" stop-color="#eef8f4"/>
+      <stop offset="1" stop-color="#e2f1ec"/>
+    </linearGradient>
+    <radialGradient id="skin" cx="46%" cy="32%" r="80%">
+      <stop offset="0" stop-color="#f2cdb5"/>
+      <stop offset="0.6" stop-color="#e7b69a"/>
+      <stop offset="1" stop-color="#d3967a"/>
+    </radialGradient>
+    <radialGradient id="ring" cx="50%" cy="50%" r="54%">
+      <stop offset="0" stop-color="#c4665a" stop-opacity="0.12"/>
+      <stop offset="0.62" stop-color="#c4665a" stop-opacity="0.34"/>
+      <stop offset="0.84" stop-color="#bd5c51" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#bd5c51" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ring2" cx="50%" cy="50%" r="52%">
+      <stop offset="0" stop-color="#d1796c" stop-opacity="0.1"/>
+      <stop offset="0.68" stop-color="#cd7164" stop-opacity="0.3"/>
+      <stop offset="0.9" stop-color="#c25f53" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#c25f53" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="blurSmall" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="800" fill="url(#bg)"/>
+  <circle cx="1440" cy="120" r="200" fill="#d9f0e9" opacity="0.6"/>
+  <circle cx="150" cy="690" r="230" fill="#e2f4ee" opacity="0.7"/>
+  <circle cx="120" cy="120" r="86" fill="#ffffff" opacity="0.55"/>
+  <path d="M1210 660c94-42 178-18 250 66" fill="none" stroke="#cfe8e1" stroke-width="22" stroke-linecap="round" opacity="0.55"/>
+  <path d="M180 200c58-46 126-52 192-16" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- 皮肤局部：躯干/四肢 -->
+  <g transform="rotate(-9 800 400)">
+    <ellipse cx="800" cy="400" rx="575" ry="226" fill="#b7785d" opacity="0.15" filter="url(#blur)"/>
+    <ellipse cx="800" cy="392" rx="566" ry="218" fill="url(#skin)"/>
+    <ellipse cx="740" cy="326" rx="360" ry="98" fill="#ffe2cf" opacity="0.28" filter="url(#blur)"/>
+    <path d="M255 400c40-128 182-210 360-224 208-16 354 62 520 132" fill="none" stroke="#f8d8c2" stroke-width="12" stroke-linecap="round" opacity="0.35"/>
+    <path d="M330 520c160 58 342 86 560 46 120-22 238-64 330-104" fill="none" stroke="#c4876a" stroke-width="8" stroke-linecap="round" opacity="0.22"/>
+  </g>
+
+  <!-- 环形红斑：活动性边缘 + 中央相对消退 -->
+  <g transform="rotate(-9 800 400)">
+    <ellipse cx="800" cy="398" rx="252" ry="146" fill="url(#ring)" filter="url(#blur)"/>
+    <ellipse cx="800" cy="398" rx="214" ry="118" fill="url(#skin)" opacity="0.72"/>
+    <ellipse cx="800" cy="398" rx="208" ry="113" fill="url(#ring2)" opacity="0.9" filter="url(#blurSmall)"/>
+    <ellipse cx="800" cy="398" rx="176" ry="88" fill="#e9b99d" opacity="0.86"/>
+    <ellipse cx="800" cy="398" rx="170" ry="83" fill="#f0c6ac" opacity="0.55"/>
+
+    <!-- 边缘脱屑 -->
+    <g stroke="#fbeadd" stroke-width="5" stroke-linecap="round" opacity="0.8">
+      <path d="M636 330l26-13"/><path d="M688 300l24-11"/><path d="M746 284l26-9"/>
+      <path d="M810 286l26-6"/><path d="M872 300l24-9"/><path d="M926 328l22-12"/>
+      <path d="M676 462l-22 14"/><path d="M734 490l-24 12"/><path d="M798 502l-26 9"/>
+      <path d="M862 496l-24 11"/><path d="M922 472l-22 13"/><path d="M968 434l-18 16"/>
+    </g>
+    <g stroke="#e8b49a" stroke-width="3" stroke-linecap="round" opacity="0.55">
+      <path d="M660 356l18-8"/><path d="M712 322l18-7"/><path d="M774 306l18-5"/>
+      <path d="M842 308l18-6"/><path d="M902 330l18-8"/><path d="M950 366l16-9"/>
+      <path d="M650 444l-16 10"/><path d="M706 476l-17 10"/><path d="M770 492l-18 7"/>
+      <path d="M836 490l-17 8"/><path d="M900 468l-16 11"/><path d="M946 432l-15 13"/>
+    </g>
+
+    <!-- 边缘小丘疹/卫星灶 -->
+    <g fill="#b95f54" opacity="0.6">
+      <circle cx="584" cy="386" r="7"/><circle cx="614" cy="452" r="6"/>
+      <circle cx="1032" cy="352" r="7"/><circle cx="1062" cy="416" r="6"/>
+      <circle cx="548" cy="470" r="5"/><circle cx="1094" cy="470" r="5"/>
+      <circle cx="632" cy="286" r="5"/><circle cx="986" cy="292" r="5"/>
+    </g>
+    <g fill="#c97163" opacity="0.42" filter="url(#blurSmall)">
+      <circle cx="584" cy="386" r="16"/><circle cx="1032" cy="352" r="16"/>
+      <circle cx="614" cy="452" r="13"/><circle cx="1062" cy="416" r="13"/>
+    </g>
+
+    <!-- 中央消退区的细碎鳞屑 -->
+    <g stroke="#f7e2d3" stroke-width="4" stroke-linecap="round" opacity="0.55">
+      <path d="M742 392l18-8"/><path d="M800 374l16-6"/><path d="M852 402l16-9"/>
+      <path d="M784 424l18-7"/>
+    </g>
+  </g>
+
+  <ellipse cx="800" cy="238" rx="300" ry="58" fill="#ffffff" opacity="0.15" filter="url(#blur)"/>
+</svg>

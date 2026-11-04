@@ -4,6 +4,7 @@ import axios from 'axios';
 import { ElAvatar, ElRow, ElCol, ElCard, ElForm, ElFormItem, ElInput, ElButton,ElDialog } from 'element-plus';
 
 import { useRouter } from 'vue-router';
+import AppNavbar from '../components/AppNavbar.vue';
 
 
 // 获取 token
@@ -315,46 +316,7 @@ onMounted(() => {
 
 <template>
   <div class="profile-container">
-    <header style="position: fixed; top: 0; left: 0; width: 100%; z-index: 1000;  display: flex; justify-content: space-between; padding: 20px 100px; box-shadow: 0 2px 0 0 rgb(255, 255, 255);">
-      <div>
-        <img src="../assets/t.png" alt="logo" class="logo1" />
-      </div>
-      <select @change="toggleLanguage" class="language-select">
-        <option value="zh" :selected="language === 'zh'">中文版</option>
-        <option value="en" :selected="language === 'en'">English</option>
-      </select>
-      <nav class="navigations">
-        <RouterLink to="/Picture">
-          <button class="btnLogin-popups">首页</button>
-        </RouterLink>
-        <RouterLink to="/MedicalServices">
-          <button class="btnLogin-popups">医疗服务</button>
-        </RouterLink>
-        <RouterLink to="/AboutUs">
-          <button class="btnLogin-popups">关于我们</button>
-        </RouterLink>
-        <RouterLink to="/home">
-          <button class="btnLogin-popups">询问AI</button>
-        </RouterLink>
-      </nav>
-      <div class="w">
-        <RouterLink to="/PublicVersion" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="color: #b9eeea; font-size: 16px; margin-right: 5px; cursor: pointer;">公众版</span>
-        </RouterLink>
-        <RouterLink to="/FastVersion" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="color: #107da8; font-size: 16px; margin-right: 5px; cursor: pointer;">|极速版</span>
-        </RouterLink>
-        <RouterLink to="/care" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="font-size: 16px; cursor: pointer;color: #107da8;">|关怀模式</span>
-        </RouterLink>
-      </div>
-    </header>
-
-    <RouterLink to="/Picture">
-      <span class="icon-tu">
-        <ion-icon name="arrow-back-outline"></ion-icon>
-      </span>
-    </RouterLink>
+    <AppNavbar />
 
     <div class="box">
   
@@ -486,7 +448,7 @@ onMounted(() => {
     <footer class="footer">
       <nav class="navigation">
         <p><RouterLink to="/Picture">首页</RouterLink></p><br>
-        <p><RouterLink to="/MedicalServices">医疗服务</RouterLink></p><br>
+        <p><RouterLink to="/doctor">常见病例</RouterLink></p><br>
         <p><RouterLink to="/AboutUs">关于我们</RouterLink></p><br>
       </nav>
       <div class="slogan">
@@ -498,15 +460,8 @@ onMounted(() => {
       </div>
     </footer>
     <footer class="footer">
-      <nav class="navigation">
-        <ul>
-          <li><RouterLink to="/sitemap">网站地图</RouterLink></li>
-          <li><RouterLink to="/legal">法律声明</RouterLink></li>
-          <li><RouterLink to="/contact">联系我们</RouterLink></li>
-        </ul>
-      </nav>
       <div class="copyright">
-        <p>侵权申诉 | 隐私条约 | 网站建设</p>
+        <p>SkinCare AI · AI 建议仅供参考，如有不适请及时就医</p>
       </div>
     </footer>
   </div>
@@ -980,6 +935,313 @@ header {
 @media screen and (max-width: 1200px) {
   .language-select {
     margin-left: -100px; /* 调整适合小屏幕的值 */
+  }
+}
+</style>
+
+<style scoped>
+/* =========================================================
+   个人中心：从深色背景 + 半透明卡片改为医疗健康档案布局
+   ========================================================= */
+.profile-container {
+  min-height: 100vh;
+  padding-bottom: 30px;
+  background:
+    radial-gradient(circle at 92% 4%, rgba(23, 184, 166, 0.1), transparent 30%),
+    var(--ai-mint-2) !important;
+  background-image: none !important;
+}
+
+.box {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 28px 0 18px !important;
+}
+
+.lishi-pel-container {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.75fr);
+  gap: 20px;
+  align-items: start !important;
+  padding: 0 !important;
+}
+
+.lishi {
+  width: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.pel {
+  width: auto !important;
+  margin: 0 !important;
+  padding: 24px !important;
+  border: 1px solid var(--ai-line);
+  border-radius: 24px !important;
+  background: #fff !important;
+  box-shadow: var(--ai-shadow-sm);
+  display: block !important;
+}
+
+.history-image-container {
+  height: 150px !important;
+  margin: 0 0 14px !important;
+  overflow: hidden;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--ai-primary-deep), var(--ai-primary));
+}
+
+.history-icon {
+  width: 100% !important;
+  height: 150px !important;
+  object-fit: cover;
+  opacity: 0.55;
+}
+
+.history-text {
+  top: 36% !important;
+  font-size: clamp(16px, 2vw, 22px) !important;
+  font-weight: 700;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.text {
+  top: auto !important;
+  bottom: 16px;
+  left: 18px !important;
+  transform: none !important;
+  width: auto !important;
+  padding: 7px 12px !important;
+  border-radius: 99px !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+  backdrop-filter: blur(10px);
+  color: #fff !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+.t {
+  width: 100% !important;
+  margin: 0 0 12px !important;
+  padding: 12px 15px !important;
+  border: 1px solid var(--ai-line);
+  border-radius: 14px !important;
+  background: #fff !important;
+  color: var(--ai-ink) !important;
+  font-size: 15px !important;
+  font-weight: 700;
+  box-shadow: var(--ai-shadow-sm);
+}
+
+.t ion-icon {
+  color: var(--ai-primary);
+}
+
+.content-card1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: var(--ai-ink) !important;
+}
+
+.content-card1 :deep(.el-card__body) {
+  padding: 18px !important;
+}
+
+.content-card1 .el-row {
+  display: block;
+}
+
+.jianyi,
+.jianyis {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 76px;
+  margin-bottom: 8px !important;
+  padding: 11px 12px !important;
+  border-radius: 12px !important;
+  background: #f7fbfa !important;
+  color: var(--ai-ink-soft) !important;
+  font-size: 12px;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.jianyi:hover,
+.jianyis:hover {
+  background: var(--ai-primary-soft) !important;
+}
+
+.jianyi strong,
+.jianyis strong {
+  color: var(--ai-ink);
+}
+
+hr {
+  margin: 6px 0;
+  border: 0;
+  border-top: 1px solid var(--ai-line);
+}
+
+.profile-info {
+  justify-content: flex-start !important;
+  color: var(--ai-ink) !important;
+  margin-bottom: 16px;
+}
+
+.profile-details {
+  justify-content: flex-start !important;
+  gap: 16px;
+}
+
+.profile-avatar {
+  flex: 0 0 auto !important;
+  display: flex;
+  justify-content: flex-start !important;
+}
+
+.avatar {
+  width: 96px !important;
+  height: 96px !important;
+  border: 4px solid #fff;
+  background: var(--ai-primary-soft);
+  box-shadow: var(--ai-shadow);
+  cursor: pointer;
+}
+
+.profile-text {
+  flex: 1 !important;
+  margin: 0 0 0 4px !important;
+}
+
+.profile-text h2 {
+  margin: 0 0 4px !important;
+  color: var(--ai-ink) !important;
+  font-size: 22px !important;
+}
+
+.profile-text p {
+  margin: 0 !important;
+  color: var(--ai-muted) !important;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.form-container {
+  margin-top: 8px !important;
+}
+
+.content-card,
+.content-cardss {
+  width: 100% !important;
+  height: auto !important;
+  max-height: none !important;
+  margin: 0 0 12px !important;
+  padding: 0 !important;
+  border: 1px solid var(--ai-line) !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  color: var(--ai-ink) !important;
+  display: block !important;
+  box-shadow: var(--ai-shadow-sm);
+}
+
+.content-card :deep(.el-card__body),
+.content-cardss :deep(.el-card__body) {
+  padding: 16px !important;
+}
+
+.content-card .el-form-item__label,
+.content-cardss .el-form-item__label {
+  color: var(--ai-ink-soft) !important;
+  font-weight: 600;
+}
+
+.content-card :deep(.el-input),
+.content-cardss :deep(.el-input) {
+  width: 100% !important;
+}
+
+.content-card :deep(.el-input__wrapper),
+.content-cardss :deep(.el-input__wrapper) {
+  width: 100% !important;
+}
+
+.el-button {
+  margin-top: 8px !important;
+}
+
+.footer {
+  width: min(1180px, calc(100% - 40px)) !important;
+  margin: 18px auto 0 !important;
+  padding: 18px 0 !important;
+  border-top: 1px solid var(--ai-line) !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ai-muted) !important;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.footer .navigation a,
+.footer .navigation ul li a {
+  color: var(--ai-ink-soft) !important;
+  font-size: 12px;
+}
+
+.footer .slogan {
+  color: var(--ai-ink-soft) !important;
+  font-size: 13px !important;
+  font-weight: 600;
+}
+
+.footer .copyright,
+.footer .legal-links {
+  color: var(--ai-muted) !important;
+  font-size: 11px !important;
+}
+
+.qrcode img {
+  width: 44px !important;
+  height: 44px !important;
+  margin-left: 10px !important;
+  border-radius: 6px;
+}
+
+@media (max-width: 960px) {
+  .lishi-pel-container {
+    grid-template-columns: 1fr;
+  }
+
+  .box {
+    padding-top: 22px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .box {
+    width: calc(100% - 24px);
+    padding-top: 18px !important;
+  }
+
+  .pel {
+    padding: 18px !important;
+  }
+
+  .footer {
+    width: calc(100% - 24px) !important;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .history-image-container {
+    height: 120px !important;
+  }
+
+  .history-icon {
+    height: 120px !important;
   }
 }
 </style>

@@ -125,109 +125,112 @@ const loadUserData = async (token) => {  // renamed function
 </script>
 
 <template>
-  <header style="position: fixed;">
-    <div><img src="../assets/t.png" alt="logo" class="logo1" /></div>
-  </header>
+  <div class="auth-page">
+    <header class="auth-topbar">
+      <RouterLink to="/" class="auth-logo">
+        <img src="../assets/t.png" alt="SkinCare AI" />
+        <span>SkinCare AI</span>
+      </RouterLink>
+      <RouterLink to="/enrolll" class="auth-top-link">还没有账号？立即注册</RouterLink>
+    </header>
 
-  <div class="box1">
-    <div class="wrapper">
-      <div class="form-box login">
-        <h2>登录</h2>
-        <!-- 表单 -->
+    <main class="auth-main">
+      <!-- 左侧品牌区：先建立“AI 医疗顾问”的信任感，再让用户登录 -->
+      <section class="auth-brand-panel">
+        <span class="ai-eyebrow"><span class="ai-pulse"></span> AI 皮肤健康顾问</span>
+        <h1>让每一次皮肤困扰<br><em>都被认真看见</em></h1>
+        <p class="auth-lead">
+          上传患处照片或描述症状，AI 会结合皮肤科知识库给出初步分析与护理建议。
+          结果仅作健康参考，帮助你更从容地决定下一步。
+        </p>
+
+        <ul class="auth-points">
+          <li>
+            <span class="point-icon"><ion-icon name="scan-outline"></ion-icon></span>
+            <span><strong>图像 + 文字双通道分析</strong>支持患处照片、症状描述与追问</span>
+          </li>
+          <li>
+            <span class="point-icon"><ion-icon name="library-outline"></ion-icon></span>
+            <span><strong>皮肤科知识库检索</strong>15 类常见皮肤病，回答有依据</span>
+          </li>
+          <li>
+            <span class="point-icon"><ion-icon name="shield-checkmark-outline"></ion-icon></span>
+            <span><strong>隐私优先</strong>账号隔离，图片仅用于本次分析</span>
+          </li>
+        </ul>
+
+        <div class="auth-stat-row">
+          <div class="auth-stat"><strong>15 类</strong><span>常见皮肤病覆盖</span></div>
+          <div class="auth-stat"><strong>秒级</strong><span>图像初步分析</span></div>
+          <div class="auth-stat"><strong>7×24</strong><span>随时可问</span></div>
+        </div>
+      </section>
+
+      <!-- 右侧登录卡片：原有 v-model、handleLogin、loading 全部保持不变 -->
+      <section class="auth-card form-box login">
+        <div class="auth-card-head">
+          <span class="auth-icon"><ion-icon name="medkit-outline"></ion-icon></span>
+          <h2>欢迎回来</h2>
+          <p>登录后继续你的皮肤健康档案</p>
+        </div>
+
         <form @submit.prevent="handleLogin">
-          <!-- 账号输入框 -->
           <div class="input-box">
-            <span class="icon"><ion-icon name="phone-portrait-outline"></ion-icon></span>
-            <input type="text" v-model="account" required />
+            <span class="icon"><ion-icon name="person-outline"></ion-icon></span>
+            <input type="text" v-model="account" required autocomplete="username" />
             <label>账号</label>
           </div>
 
-          <!-- 密码输入框 -->
           <div class="input-box">
-            <span class="icon"><ion-icon name="bag-outline"></ion-icon></span>
-            <input type="password" v-model="password" required />
+            <span class="icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
+            <input type="password" v-model="password" required autocomplete="current-password" />
             <label>密码</label>
           </div>
 
-          <!-- 表单错误提示 -->
           <p v-if="formError" class="error">{{ formError }}</p>
 
-          <!-- 提交按钮 -->
           <button type="submit" class="btn" :disabled="loading">
             {{ loading ? '登录中...' : '登录' }}
           </button>
 
           <div class="remember-forgot">
-            <RouterLink to="/Forgot password">忘记密码?</RouterLink>
+            <RouterLink to="/Forgot password">忘记密码？</RouterLink>
           </div>
 
-          <!-- 注册链接 -->
           <div class="login-register">
-            <p>还没有账号? <RouterLink to="/enrolll">注册</RouterLink></p>
+            <p>还没有账号？<RouterLink to="/enrolll">免费注册</RouterLink></p>
           </div>
         </form>
-      </div>
-    </div>
+
+        <p class="auth-legal">登录即代表你同意服务条款与隐私政策。AI 建议不替代线下医生诊断。</p>
+      </section>
+    </main>
+
+    <div v-if="showAlert" class="alert-box ai-toast">{{ alertMessage }}</div>
   </div>
-
-  <!-- 弹框 -->
-  <div v-if="showAlert" class="alert-box">{{ alertMessage }}</div>
-
-  <bottom>
-    <nav class="navigation">
-      <div class="zi-nav">
-        <p class="zi"></p>
-      </div>
-    </nav>
-  </bottom>
 </template>
 
 <style scoped>
-header{
-  width: 100%;
-  padding: 20px 100px;
-z-index:998;
-/* background: linear-gradient(90deg, #4da8b7 40% ,#55ceb2e4); */
-background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  max-height: 10vh;
-  height: 10vh;
+.auth-page {
+  min-height: 100vh;
 }
 
-
-/* 样式调整 */
-bottom{
-  position: fixed;
-  bottom:0;
-  width: 100%;
-  padding: 20px 100px;
-/* background-color:rgba(92, 90, 90, 0.7); */
-/* background-color: #b0b4b4; */
-/* background: linear-gradient(90deg, #4da8b7 40% ,#55ceb2e4); */
-background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  z-index: 99;
-  max-height: 4vw;
+.auth-topbar {
+  padding-top: 22px;
+  padding-bottom: 10px;
 }
 
-.alert-box {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  color: #333;
-  padding: 10px 20px;
-  border-radius: 5px;
-  z-index: 1000;
+.auth-brand-panel h1 {
+  margin-top: 20px;
 }
-.error {
-  color: #fff;
-  font-size: 14px;
-  margin: 10px 0;
+
+.auth-card-head h2 {
+  letter-spacing: -0.03em;
+}
+
+@media (max-width: 960px) {
+  .auth-brand-panel h1 {
+    margin-top: 16px;
+  }
 }
 </style>

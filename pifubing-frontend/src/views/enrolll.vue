@@ -96,150 +96,157 @@ const handleSubmit = async () => {
 </script>
 
 <template>
-  <header style="position: fixed;">
-    <div><img src="../assets/t.png" alt="logo" class="logo1" /></div>
-  </header>
+  <div class="auth-page">
+    <header class="auth-topbar">
+      <RouterLink to="/" class="auth-logo">
+        <img src="../assets/t.png" alt="SkinCare AI" />
+        <span>SkinCare AI</span>
+      </RouterLink>
+      <RouterLink to="/HomeView" class="auth-top-link">已有账号？返回登录</RouterLink>
+    </header>
 
-  <div class="q">
-    <div class="wrapper1">
-      <div class="form-box login">
-        <h2>注册</h2>
+    <main class="auth-main auth-main--register">
+      <section class="auth-brand-panel">
+        <span class="ai-eyebrow"><span class="ai-pulse"></span> 建立你的健康档案</span>
+        <h1>一次注册，<br><em>长期守护</em></h1>
+        <p class="auth-lead">
+          填写基础信息后，AI 能结合你的年龄、性别与既往病史，给出更贴合个人情况的皮肤健康建议。
+        </p>
 
-      
-        
+        <ul class="auth-points">
+          <li>
+            <span class="point-icon"><ion-icon name="id-card-outline"></ion-icon></span>
+            <span><strong>个人健康档案</strong>病史、过敏史与问诊记录集中管理</span>
+          </li>
+          <li>
+            <span class="point-icon"><ion-icon name="chatbubbles-outline"></ion-icon></span>
+            <span><strong>连续对话</strong>每次问诊保留上下文，追问更自然</span>
+          </li>
+          <li>
+            <span class="point-icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
+            <span><strong>仅用于健康分析</strong>不向第三方出售或公开你的信息</span>
+          </li>
+        </ul>
+
+        <div class="auth-stat-row">
+          <div class="auth-stat"><strong>1 分钟</strong><span>完成注册</span></div>
+          <div class="auth-stat"><strong>加密</strong><span>账号与密码保护</span></div>
+        </div>
+      </section>
+
+      <!-- 注册卡片：输入顺序与原有 e2e/业务保持一致 -->
+      <section class="auth-card auth-card--wide form-box login">
+        <div class="auth-card-head">
+          <span class="auth-icon"><ion-icon name="person-add-outline"></ion-icon></span>
+          <h2>创建账号</h2>
+          <p>带 * 的信息用于生成更准确的健康建议</p>
+        </div>
+
         <form @submit.prevent="handleSubmit">
-          <!-- 账号 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="person-outline"></ion-icon></span>
-            <input type="text" v-model="account" required />
-            <label>账号</label>
+          <div class="auth-grid">
+            <div class="input-box">
+              <span class="icon"><ion-icon name="person-outline"></ion-icon></span>
+              <input type="text" v-model="account" required autocomplete="username" />
+              <label>账号</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="id-card-outline"></ion-icon></span>
+              <input type="text" v-model="name" required autocomplete="name" />
+              <label>姓名</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="male-female-outline"></ion-icon></span>
+              <input type="text" v-model="gender" required />
+              <label>性别</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="calendar-outline"></ion-icon></span>
+              <input type="number" v-model.number="age" min="0" max="150" required />
+              <label>年龄</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="call-outline"></ion-icon></span>
+              <input type="tel" v-model="phone_number" required autocomplete="tel" />
+              <label>手机号</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
+              <input type="password" v-model="password" required autocomplete="new-password" />
+              <label>密码</label>
+            </div>
+
+            <div class="input-box">
+              <span class="icon"><ion-icon name="shield-checkmark-outline"></ion-icon></span>
+              <input type="password" v-model="confirmPassword" required autocomplete="new-password" />
+              <label>确认密码</label>
+            </div>
+
+            <div class="input-box input-box--full">
+              <span class="icon"><ion-icon name="mail-outline"></ion-icon></span>
+              <input type="email" v-model="email" required autocomplete="email" />
+              <label>邮箱</label>
+              <button
+                type="button"
+                class="btn-verify"
+                :disabled="sendingCode"
+                @click="handleSendVerificationCode"
+              >
+                {{ sendingCode ? '发送中...' : '发送验证码' }}
+              </button>
+            </div>
+
+            <div class="input-box input-box--full">
+              <span class="icon"><ion-icon name="key-outline"></ion-icon></span>
+              <input type="text" v-model="verificationCode" required inputmode="numeric" />
+              <label>请输入邮箱验证码</label>
+            </div>
           </div>
 
-               <!-- 姓名 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="person-remove-outline"></ion-icon></span>
-            <input type="name" v-model="name" required />
-            <label>姓名</label>
-          </div>
-
-                  <!-- 性别 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="male-female-outline"></ion-icon></span>
-            <input type="gender" v-model="gender" required />
-            <label>性别</label>
-          </div>
-
-                     <!-- 年纪-->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="lock-open-outline"></ion-icon></span>
-            <input type="number" v-model.number="age" min="0" max="150" required />
-            <label>年龄</label>
-          </div>
-
-          <div class="input-box">
-            <span class="icon"><ion-icon name="phone-portrait-outline"></ion-icon></span>
-            <input type="tel" v-model="phone_number" required />
-            <label>手机号</label>
-          </div>
-
-          <!-- 密码 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
-            <input type="password" v-model="password" required />
-            <label>密码</label>
-          </div>
-
-          <!-- 确认密码 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="bag-add-outline"></ion-icon></span>
-            <input type="password" v-model="confirmPassword" required />
-            <label>确认密码</label>
-          </div>
-
-          <!-- 邮箱 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="mail-outline"></ion-icon></span>
-            <input type="email" v-model="email" required />
-            <label>邮箱</label>
-            <button
-              type="button"
-              class="btn-verify"
-              :disabled="sendingCode"
-              @click="handleSendVerificationCode"
-            >
-              {{ sendingCode ? '发送中...' : '发送验证码' }}
-            </button>
-          </div>
-
-          <!-- 验证码 -->
-          <div class="input-box">
-            <span class="icon"><ion-icon name="shield-checkmark-outline"></ion-icon></span>
-            <input type="text" v-model="verificationCode" required />
-            <label>请输入验证码</label>
-          </div>
-
-          <!-- 注册按钮 -->
-          <button type="submit" class="btn">注册</button>
+          <button type="submit" class="btn">注册并开始使用</button>
         </form>
 
-        <!-- 已有账号链接 -->
         <div class="login-register">
-          <p>已经有账号？</p>
-          <RouterLink to="/HomeView">
-            <a href="#" class="register-link" id="color">登录</a>
-          </RouterLink>
+          <p>已经有账号？<RouterLink to="/HomeView">直接登录</RouterLink></p>
         </div>
-      </div>
+
+        <p class="auth-legal">注册即代表你同意服务条款与隐私政策。AI 建议不替代线下医生诊断。</p>
+      </section>
+    </main>
+
+    <div v-if="showAlert" class="alert-box">
+      <p>{{ alertMessage }}</p>
     </div>
   </div>
-
-  <!-- 全局弹框 -->
-  <div v-if="showAlert" class="alert-box">
-    <p>{{ alertMessage }}</p>
-  </div>
-
 </template>
 
 <style scoped>
-header{
-  width: 100%;
-  padding: 20px 100px;
-z-index:998;
-/* background: linear-gradient(90deg, #4da8b7 40% ,#55ceb2e4); */
-background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  max-height: 10vh;
-  height: 10vh;
-}
-
-.alert-box {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  color: #100f0f;
-  padding: 15px 20px;
-  border-radius: 5px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-}
-
-#color{
-  color: #162938;
-}
-
-.q{
-  display: flex;
-  justify-content: center;
-  align-items: center;
+.auth-page {
   min-height: 100vh;
-  background: url('../assets/登录.png')no-repeat;
-  background-size: cover;
-  /* background-position: center; */
-  padding: 20px;
+}
 
+.auth-topbar {
+  padding-top: 22px;
+  padding-bottom: 10px;
+}
+
+.auth-main--register {
+  align-items: start;
+  padding-top: 34px;
+}
+
+.auth-main--register .auth-brand-panel {
+  position: sticky;
+  top: 36px;
+}
+
+@media (max-width: 960px) {
+  .auth-main--register .auth-brand-panel {
+    position: static;
+  }
 }
 </style>

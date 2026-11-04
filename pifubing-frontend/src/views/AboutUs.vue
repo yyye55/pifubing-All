@@ -1,258 +1,446 @@
 <template>
-  <div class="container5">
-    <header style="position: fixed;">
-      <div><img src="../assets/t.png" alt="logo" class="logo1" /></div>
-      <select @change="toggleLanguage" class="language-select">
-        <option value="zh" :selected="language === 'zh'">中文版</option>
-        <option value="en" :selected="language === 'en'">English</option>
-      </select>
-      <nav class="navigations">
-        <RouterLink to="/Picture">
-          <button class="btnLogin-popups">首页</button>
-        </RouterLink>
-        <RouterLink to="/MedicalServices">
-          <button class="btnLogin-popups">医疗服务</button>
-        </RouterLink>
-        <RouterLink to="/AboutUs">
-          <button class="btnLogin-popups">关于我们</button>
-        </RouterLink>
-        <RouterLink to="/HomeView">
-          <button class="btnLogin-popups">登录</button>
-        </RouterLink>
-      </nav>
-      <div class="w">
-        <RouterLink to="/PublicVersion" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="color: #b9eeea; font-size: 16px; margin-right: 5px; cursor: pointer;">公众版</span>
-        </RouterLink>
-        <RouterLink to="/FastVersion" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="color: #107da8; font-size: 16px; margin-right: 5px; cursor: pointer;">|极速版</span>
-        </RouterLink>
-        <RouterLink to="/care" custom v-slot="{ navigate }">
-          <span @click="navigate" role="link" style="font-size: 16px; cursor: pointer;color: #107da8;">|关怀模式</span>
-        </RouterLink>
-      </div>
-    </header>
-    <div class="box4">
-      <!-- <h1 class="i" style="padding-top: 20vh;">
-        <i>HELLO</i>
-      </h1>
-      <h1 class="h">
-        <p>AI让健康预见未来，而我们的使命，是让每一寸肌肤都被精准守护<br>
-         Skin AI. Where Science Meets Humanity.</p>
-      </h1> -->
-    </div>
+  <div class="about-page">
+    <AppNavbar />
+
+    <main class="about-main">
+      <!-- 首屏：说明产品定位，强调“辅助理解”而不是“替代医生” -->
+      <section class="about-hero">
+        <div class="about-hero-copy">
+          <span class="ai-eyebrow"><span class="ai-pulse"></span>关于我们</span>
+          <h1>让专业的皮肤知识，<br><em>更容易被理解。</em></h1>
+          <p>
+            我们是一支关注皮肤健康的学生团队。AI 皮肤医疗顾问将图像识别、皮肤科知识库与
+            大语言模型结合起来，帮助用户在就医前梳理症状、理解常见皮肤表现，并获得
+            更清晰的护理方向。
+          </p>
+          <div class="about-actions">
+            <RouterLink to="/home" class="ai-primary-btn">
+              体验 AI 问诊
+              <ion-icon name="arrow-forward-outline"></ion-icon>
+            </RouterLink>
+            <RouterLink to="/Picture" class="ai-ghost-btn">浏览首页</RouterLink>
+          </div>
+        </div>
+
+        <aside class="about-hero-card">
+          <div class="about-card-head">
+            <span>我们的原则</span>
+          </div>
+          <ul>
+            <li>
+              <ion-icon name="shield-checkmark-outline"></ion-icon>
+              <div><strong>辅助而非替代</strong><span>AI 建议不构成医疗诊断，必要时请及时线下就医。</span></div>
+            </li>
+            <li>
+              <ion-icon name="lock-closed-outline"></ion-icon>
+              <div><strong>隐私优先</strong><span>账号数据相互隔离，问诊记录仅本人可见。</span></div>
+            </li>
+            <li>
+              <ion-icon name="book-outline"></ion-icon>
+              <div><strong>知识有出处</strong><span>回答结合皮肤科知识库，减少无依据的猜测。</span></div>
+            </li>
+          </ul>
+        </aside>
+      </section>
+
+      <!-- 三项能力：让用户快速理解产品边界 -->
+      <section class="about-values">
+        <article class="about-value-card">
+          <span class="value-icon"><ion-icon name="images-outline"></ion-icon></span>
+          <h2>看懂皮肤表现</h2>
+          <p>上传清晰的患处照片，AI 会给出常见皮肤病的可能分类与置信度，帮助你更准确地描述问题。</p>
+        </article>
+        <article class="about-value-card">
+          <span class="value-icon"><ion-icon name="search-outline"></ion-icon></span>
+          <h2>检索专业知识</h2>
+          <p>从名称、概述、症状到治疗方法，结合向量检索补充相关知识点，而不是只给一句笼统结论。</p>
+        </article>
+        <article class="about-value-card">
+          <span class="value-icon"><ion-icon name="chatbubbles-outline"></ion-icon></span>
+          <h2>陪你梳理症状</h2>
+          <p>通过连续对话追问部位、持续时间、瘙痒程度和用药情况，让就医前的准备更有条理。</p>
+        </article>
+      </section>
+
+      <!-- 使用流程：降低第一次使用的理解成本 -->
+      <section class="about-flow">
+        <div class="flow-head">
+          <div>
+            <h2 class="ai-section-title">一次问诊，三步完成</h2>
+            <p class="ai-section-sub">从描述问题到获得建议，全程由你决定是否继续</p>
+          </div>
+        </div>
+        <ol>
+          <li>
+            <span>01</span>
+            <div><strong>拍照或描述</strong><p>上传患处照片，或直接输入瘙痒、红斑、脱屑等症状。</p></div>
+          </li>
+          <li>
+            <span>02</span>
+            <div><strong>AI 初步分析</strong><p>图像分类与知识检索同时进行，给出可能方向和护理提示。</p></div>
+          </li>
+          <li>
+            <span>03</span>
+            <div><strong>继续追问</strong><p>围绕症状、诱因和用药继续对话，整理出可带给医生的信息。</p></div>
+          </li>
+        </ol>
+      </section>
+
+      <!-- 免责声明：医疗类产品必须有清晰、可读的边界说明 -->
+      <section class="about-note">
+        <div class="note-icon"><ion-icon name="information-circle-outline"></ion-icon></div>
+        <div class="note-copy">
+          <h2>关于 AI 建议的边界</h2>
+          <p>
+            AI 皮肤医疗顾问是健康科普与问诊辅助工具，不能替代执业医师的诊断和治疗。
+            若出现大面积皮疹、呼吸困难、发热、剧烈疼痛或症状快速加重，请立即前往医院就诊。
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="about-footer">
+      <span>AI 建议仅供参考，如有不适请及时就医并遵医嘱</span>
+    </footer>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue';
-import { useRouter } from 'vue-router';
-import axios from 'axios';
-
-const router = useRouter();
-const language = ref('zh');
-
-const toggleLanguage = (event) => {
-  language.value = event.target.value;
-  // 你可以在这里添加其他语言切换逻辑
-};
+import AppNavbar from '../components/AppNavbar.vue';
 </script>
 
 <style scoped>
-.w {
-  position: fixed;
-  top: 20px; /* 根据需要调整 */
-  right: 20px; /* 根据需要调整 */
-  z-index: 1000;
-  font-size: 1.1em;
-  color: #fff;
+.about-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 88% 2%, rgba(23, 184, 166, 0.13), transparent 32%),
+    var(--ai-mint-2);
 }
 
-.navigations {
-  display: flex;
-  align-items: flex-start; /* 左对齐 */
+.about-main {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: clamp(36px, 5vw, 68px) 0 56px;
+}
+
+.about-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: clamp(30px, 5vw, 64px);
   align-items: center;
-  padding: 10px;
 }
 
-.navigations .btnLogin-popups {
-  width: 130px;
-  height: 50px;
-  background: transparent;
-  border: 2px solid #fff;
-  outline: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 1.1em;
-  color: #fff;
-  font-weight: 500;
-  margin-left: 90px;
-  margin-top: 49px;
-  transition: .5s;
-  text-align: center;
-  max-height: 4vw;
-  z-index: 997;
+.about-hero-copy h1 {
+  margin: 18px 0 18px;
+  color: var(--ai-ink);
+  font-size: clamp(36px, 4.6vw, 58px);
+  line-height: 1.12;
+  letter-spacing: -0.05em;
+  font-weight: 750;
 }
 
-.navigations .btnLogin-popups:hover {
+.about-hero-copy h1 em {
+  color: var(--ai-primary);
+  font-style: normal;
+}
+
+.about-hero-copy > p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--ai-ink-soft);
+  font-size: 15px;
+  line-height: 1.9;
+}
+
+.about-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.about-hero-card {
+  padding: 24px;
+  border: 1px solid var(--ai-line);
+  border-radius: var(--ai-radius);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--ai-shadow);
+}
+
+.about-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--ai-line);
+  color: var(--ai-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.about-hero-card ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+}
+
+.about-hero-card li {
+  display: flex;
+  gap: 12px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--ai-line);
+}
+
+.about-hero-card li:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
+}
+
+.about-hero-card li > ion-icon {
+  flex: 0 0 34px;
+  height: 34px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 18px;
+}
+
+.about-hero-card strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ai-ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.about-hero-card span {
+  display: block;
+  color: var(--ai-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.about-values {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 30px;
+}
+
+.about-value-card {
+  padding: 24px;
+  border: 1px solid var(--ai-line);
+  border-radius: 20px;
   background: #fff;
-  color: #162938;
+  box-shadow: var(--ai-shadow-sm);
 }
 
-.navigations .icon-tu {
-  position: absolute;
-  margin-right: 5vw;
-  font-size: 1.7em;
+.value-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 16px;
+  border-radius: 12px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 21px;
+}
+
+.about-value-card h2 {
+  margin: 0 0 8px;
+  color: var(--ai-ink);
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+
+.about-value-card p {
+  margin: 0;
+  color: var(--ai-muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.about-flow {
+  margin-top: 20px;
+  padding: clamp(24px, 4vw, 38px);
+  border: 1px solid var(--ai-line);
+  border-radius: var(--ai-radius);
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.98), rgba(240, 250, 247, 0.98)),
+    #fff;
+  box-shadow: var(--ai-shadow-sm);
+}
+
+.flow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.about-flow ol {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 24px 0 0;
+  padding: 0;
+}
+
+.about-flow li {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--ai-line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.about-flow li > span {
+  flex: 0 0 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--ai-primary);
   color: #fff;
-  line-height: 57px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
-.language-select option {
-  color: #000;
+.about-flow strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ai-ink);
+  font-size: 14px;
 }
 
-header {
-  width: 100%;
-  padding: 20px 100px;
-  z-index: 998;
-  background-color: #12405d;
+.about-flow p {
+  margin: 0;
+  color: var(--ai-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.about-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin-top: 20px;
+  padding: 22px 24px;
+  border: 1px solid #f0dfb9;
+  border-radius: 18px;
+  background: #fffaf0;
+}
+
+.note-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #fff1d6;
+  color: #b57b12;
+  font-size: 22px;
+}
+
+.note-copy h2 {
+  margin: 0 0 5px;
+  color: #5f4514;
+  font-size: 15px;
+}
+
+.note-copy p {
+  margin: 0;
+  color: #8a6b32;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.note-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 15px;
+  border: 1px solid #ead5a9;
+  border-radius: 99px;
+  color: #8a6b32;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.note-link:hover {
+  background: #fff1d6;
+}
+
+.about-footer {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 22px 0 30px;
+  border-top: 1px solid var(--ai-line);
   display: flex;
   justify-content: space-between;
-  max-height: 20vh;
-  height: 12vh;
-  box-shadow: 0 2px 0 0 rgb(255, 255, 255); /* 添加底部白色边框效果 */
-  position: fixed; /* 固定在顶部 */
-  top: 0;
-  left: 0;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--ai-muted);
+  font-size: 12px;
 }
 
-.language-select {
-  background-color: transparent;
-  border: 1px solid rgb(255, 255, 255);
-  border-radius: 8px;
-  color: #e8ecf0;
-  font-size: 1.1em;
-  cursor: pointer;
-  position: absolute;
-  left: 420px; /* 根据需要调整 */
-  top: 50%;
-  transform: translateY(-50%);
-  outline: none;
-}
+@media (max-width: 980px) {
+  .about-hero {
+    grid-template-columns: 1fr;
+  }
 
-.language-select::after {
-  border: 1px solid rgb(255, 255, 255);
-  color: black;
-}
+  .about-values {
+    grid-template-columns: 1fr;
+  }
 
-.h {
-  text-align: center;
-  color: #f6eded;
-  font-size: 2em;
-}
+  .about-flow ol {
+    grid-template-columns: 1fr;
+  }
 
-.i {
-  color: #efe7e7;
-  font-size: 15em;
-  text-align: center;
-}
+  .about-note {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
 
-.alert-box {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  color: #100f0f;
-  padding: 15px 20px;
-  border-radius: 5px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-}
-
-#color {
-  color: #162938;
-}
-
-.box4 {
-  position: relative; /* 使得视频和文字可以重叠 */
-  height: calc(100vh - 12vh); /* 减去 header 的高度 */
-  overflow: hidden;
-  background-image: url('../assets/关于我们.jpg');
-  background-repeat: no-repeat;
-  background-size: cover;
-  background-position: center;
-  margin-top: 12vh; /* 与 header 的高度相同 */
-}
-
-.box4 video {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  z-index: -1;
-}
-
-.container5 {
-  position: relative; /* 确保子元素可以相对于容器定位 */
-}
-
-.b1 {
-  border: 0;
-  border-radius: 6px;
-  color: rgb(16, 16, 16);
-  padding: 15px 20px;
-  margin: 20px;
-  width: 100px;
-  height: 50px;
-  background: transparent;
-  text-transform: uppercase;
-  border: 1px solid #fff;
-  background: linear-gradient(to right, #6c7171 50%, rgba(255, 255, 255, 0.5) 50%);
-  background-size: 200% 100%;
-  background-position: right bottom;
-  transition: all 0.5s ease;
-  cursor: pointer;
-}
-
-.b1:hover {
-  background-position: left bottom;
-  color: #fff;
-}
-
-/* 媒体查询以适应不同屏幕尺寸 */
-@media screen and (max-width: 1200px) {
-  .w {
-    top: 15px;
-    right: 15px;
+  .note-link {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 }
 
-@media screen and (max-width: 992px) {
-  .w {
-    top: 10px;
-    right: 10px;
+@media (max-width: 640px) {
+  .about-main {
+    width: calc(100% - 28px);
+    padding-top: 28px;
   }
-}
 
-@media screen and (max-width: 768px) {
-  .w {
-    top: 5px;
-    right: 5px;
+  .about-hero-copy h1 {
+    font-size: clamp(32px, 9vw, 42px);
   }
-}
 
-@media screen and (max-width: 576px) {
-  .w {
-    top: 0;
-    right: 0;
+  .about-actions .ai-primary-btn,
+  .about-actions .ai-ghost-btn {
+    width: 100%;
   }
-}
-@media screen and (max-width: 1200px) {
-  .language-select {
-    margin-left: -100px; /* 调整适合小屏幕的值 */
+
+  .flow-head {
+    flex-direction: column;
+  }
+
+  .about-note {
+    grid-template-columns: 1fr;
+  }
+
+  .about-footer {
+    width: calc(100% - 28px);
+    flex-direction: column;
   }
 }
 </style>

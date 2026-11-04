@@ -5,6 +5,7 @@ import App from './App.vue'
 import router from './router'
 import ElementPlus from 'element-plus';
 import 'element-plus/dist/index.css'; // 引入 Element Plus 的样式文件
+import './assets/theme.css' // 医疗顾问视觉系统：必须放在 Element Plus 之后，才能统一覆盖组件样式
 import axios from 'axios'
 import { API_BASE } from './apiBase'
 
