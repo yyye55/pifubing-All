@@ -50,6 +50,11 @@ const handleSubmit = async () => {
     return;
   }
 
+  if (password.value.length < 6) {
+    ElMessage.error('密码长度至少为 6 位');
+    return;
+  }
+
   if (password.value !== confirmPassword.value) {
     ElMessage.error('两次输入的密码不一致');
     return;
@@ -99,71 +104,61 @@ const handleSubmit = async () => {
           <div class="auth-grid">
             <div class="input-box">
               <label>账号</label>
-              <div class="input-field">
-                <input type="text" v-model="account" required autocomplete="username" />
-              </div>
+              <input type="text" v-model="account" required autocomplete="username" />
             </div>
 
             <div class="input-box">
               <label>密码</label>
-              <div class="input-field">
-                <input
-                  :type="showPassword ? 'text' : 'password'"
-                  v-model="password"
-                  required
-                  autocomplete="new-password"
-                />
-                <button
-                  type="button"
-                  class="eye-toggle"
-                  :aria-label="showPassword ? '隐藏密码' : '显示密码'"
-                  @click="showPassword = !showPassword"
-                >
-                  <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
-                </button>
-              </div>
+              <input
+                :type="showPassword ? 'text' : 'password'"
+                v-model="password"
+                required
+                autocomplete="new-password"
+              />
+              <button
+                type="button"
+                class="eye-toggle"
+                :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                @click="showPassword = !showPassword"
+              >
+                <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+              </button>
             </div>
 
             <div class="input-box">
               <label>确认密码</label>
-              <div class="input-field">
-                <input
-                  :type="showConfirmPassword ? 'text' : 'password'"
-                  v-model="confirmPassword"
-                  required
-                  autocomplete="new-password"
-                />
-                <button
-                  type="button"
-                  class="eye-toggle"
-                  :aria-label="showConfirmPassword ? '隐藏密码' : '显示密码'"
-                  @click="showConfirmPassword = !showConfirmPassword"
-                >
-                  <ion-icon :name="showConfirmPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
-                </button>
-              </div>
+              <input
+                :type="showConfirmPassword ? 'text' : 'password'"
+                v-model="confirmPassword"
+                required
+                autocomplete="new-password"
+              />
+              <button
+                type="button"
+                class="eye-toggle"
+                :aria-label="showConfirmPassword ? '隐藏密码' : '显示密码'"
+                @click="showConfirmPassword = !showConfirmPassword"
+              >
+                <ion-icon :name="showConfirmPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+              </button>
             </div>
 
             <div class="input-box">
               <label>邮箱</label>
-              <div class="input-field">
-                <input type="email" v-model="email" required autocomplete="email" />
-                <button
-                  type="button"
-                  class="btn-verify"
-                  :disabled="sendingCode"
-                  @click="handleSendVerificationCode"
-                >
-                  {{ sendingCode ? '发送中...' : '发送验证码' }}
-                </button>
-              </div>
+              <input type="email" v-model="email" required autocomplete="email" />
+              <button
+                type="button"
+                class="btn-verify"
+                :disabled="sendingCode"
+                @click="handleSendVerificationCode"
+              >
+                {{ sendingCode ? '发送中...' : '发送验证码' }}
+              </button>
             </div>
 
             <div class="input-box">
               <label>验证码</label>
-              <div class="input-field">
-                <input type="text" v-model="verificationCode" required inputmode="numeric" />
-              </div>
+              <input type="text" v-model="verificationCode" required inputmode="numeric" />
             </div>
           </div>
 

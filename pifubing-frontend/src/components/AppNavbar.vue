@@ -1,6 +1,6 @@
 <template>
   <header class="app-navbar" :class="{ 'app-navbar--large': props.large }">
-    <RouterLink to="/Picture" class="app-brand" aria-label="AI 皮肤医疗顾问">
+    <RouterLink :to="token ? '/Picture' : '/'" class="app-brand" aria-label="AI 皮肤医疗顾问">
       <img src="../assets/t.png" alt="" class="logo1" />
     </RouterLink>
 
@@ -10,10 +10,7 @@
         :key="item.id"
         :to="resolveTo(item)"
         class="nav-link"
-        :class="{
-          'is-active': isActive(item),
-          'nav-cta': item.cta
-        }"
+        :class="{ 'is-active': isActive(item) }"
         :aria-current="isActive(item) ? 'page' : undefined"
       >
         <span v-if="item.id === 'profile'" class="nav-avatar">
@@ -25,7 +22,7 @@
           />
           <template v-else>我</template>
         </span>
-        <span>{{ item.label }}</span>
+        <span>{{ labelOf(item) }}</span>
       </RouterLink>
       <button
         v-if="token"
@@ -61,20 +58,21 @@ const avatarUrl = ref(localStorage.getItem('avatarUrl') || '');
 const avatarFailed = ref(false);
 
 const NAV_ITEMS = [
-  { id: 'home', label: '首页', path: '/Picture' },
+  // 未登录：这一项显示「平台介绍」并指向 /；登录后：显示「首页」并指向皮肤图鉴首页
+  { id: 'home', label: '首页', guestLabel: '平台介绍', path: '/Picture', guestPath: '/' },
   { id: 'cases', label: '常见病例', path: '/doctor', requiresAuth: true },
-  { id: 'about', label: '关于我们', path: '/AboutUs' },
+  { id: 'about', label: '关于我们', path: '/AboutUs', loggedOutOnly: true },
   { id: 'login', label: '登录/注册', path: '/HomeView', guestOnly: true },
   { id: 'ai', label: 'AI问诊', path: '/home', requiresAuth: true, cta: true },
   { id: 'profile', label: '个人中心', path: '/Summarize', requiresAuth: true }
 ];
 
-// 未登录：首页、关于我们、登录/注册；已登录：完整导航
+// 未登录：首页、关于我们、登录/注册；已登录：完整导航（不含关于我们）
 const navItems = computed(() => {
   if (!token.value) {
     return NAV_ITEMS.filter(item => !item.requiresAuth);
   }
-  return NAV_ITEMS.filter(item => !item.guestOnly);
+  return NAV_ITEMS.filter(item => !item.guestOnly && !item.loggedOutOnly);
 });
 
 function refreshAuthState() {
@@ -88,11 +86,23 @@ function resolveTo(item) {
   if (item.requiresAuth && !token.value) {
     return '/HomeView';
   }
+  // 首页：未登录进平台介绍页，登录后进皮肤图鉴首页
+  if (item.guestPath && !token.value) {
+    return item.guestPath;
+  }
   return item.path;
 }
 
+function labelOf(item) {
+  // 未登录时首页这一项对外显示为「平台介绍」
+  if (!token.value && item.guestLabel) {
+    return item.guestLabel;
+  }
+  return item.label;
+}
+
 function isActive(item) {
-  return route.path === item.path;
+  return route.path === resolveTo(item);
 }
 
 function handleLogout() {
@@ -105,7 +115,7 @@ function handleLogout() {
   token.value = '';
   avatarUrl.value = '';
   avatarFailed.value = false;
-  router.push('/HomeView');
+  router.push('/'); // 退出后回到未登录落地页
 }
 
 onMounted(refreshAuthState);
@@ -176,26 +186,6 @@ watch(() => route.fullPath, refreshAuthState);
   border-color: rgba(255, 255, 255, 0.58);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   color: #fff;
-}
-
-.nav-link.nav-cta {
-  border-color: #fff;
-  background: #fff;
-  color: var(--ai-primary-deep);
-  font-weight: 700;
-}
-
-.nav-link.nav-cta:hover {
-  background: var(--ai-mint);
-  border-color: var(--ai-mint);
-  color: var(--ai-primary-deep);
-}
-
-.nav-link.nav-cta.is-active {
-  background: #fff;
-  border-color: #fff;
-  color: var(--ai-primary-deep);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
 }
 
 .nav-avatar {

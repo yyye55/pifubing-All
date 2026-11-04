@@ -9,17 +9,17 @@
           <span class="ai-eyebrow"><span class="ai-pulse"></span>关于我们</span>
           <h1>让专业的皮肤知识，<br><em>更容易被理解。</em></h1>
           <p>
-            我们是一支关注皮肤健康的学生团队。AI 皮肤医疗顾问将图像识别、皮肤科知识库与
-            大语言模型结合起来，帮助用户在就医前梳理症状、理解常见皮肤表现，并获得
-            更清晰的护理方向。
+            构建多模态 RAG 皮肤病 AI 诊疗系统：结合 EfficientNet-B3 与 Transformer 架构处理患处图像，
+            利用 LangChain 架构、FAISS 向量数据库与 DeepSeek 大模型生成诊疗方案，
+            让专业判断有出处、可追溯。
           </p>
-          <div class="about-actions">
-            <RouterLink to="/home" class="ai-primary-btn">
-              体验 AI 问诊
-              <ion-icon name="arrow-forward-outline"></ion-icon>
-            </RouterLink>
-            <RouterLink to="/Picture" class="ai-ghost-btn">浏览首页</RouterLink>
-          </div>
+          <ul class="about-tags">
+            <li>智辅</li>
+            <li>诊疗</li>
+            <li>高速</li>
+            <li>高效</li>
+            <li>轻量化</li>
+          </ul>
         </div>
 
         <aside class="about-hero-card">
@@ -43,22 +43,22 @@
         </aside>
       </section>
 
-      <!-- 三项能力：让用户快速理解产品边界 -->
+      <!-- 三项技术：说明系统靠什么完成诊疗 -->
       <section class="about-values">
         <article class="about-value-card">
           <span class="value-icon"><ion-icon name="images-outline"></ion-icon></span>
-          <h2>看懂皮肤表现</h2>
-          <p>上传清晰的患处照片，AI 会给出常见皮肤病的可能分类与置信度，帮助你更准确地描述问题。</p>
+          <h2>多图联合推理引擎</h2>
+          <p>同一患处的多张照片联合判断，让多个视角互相印证，结论比单张图片更稳定可靠。</p>
         </article>
         <article class="about-value-card">
-          <span class="value-icon"><ion-icon name="search-outline"></ion-icon></span>
-          <h2>检索专业知识</h2>
-          <p>从名称、概述、症状到治疗方法，结合向量检索补充相关知识点，而不是只给一句笼统结论。</p>
+          <span class="value-icon"><ion-icon name="library-outline"></ion-icon></span>
+          <h2>医学知识增强 RAG</h2>
+          <p>以皮肤病教材、诊疗指南与真实病例构建检索库，LangChain 编排流程，FAISS 建立向量索引，生成可回溯来源的方案。</p>
         </article>
         <article class="about-value-card">
-          <span class="value-icon"><ion-icon name="chatbubbles-outline"></ion-icon></span>
-          <h2>陪你梳理症状</h2>
-          <p>通过连续对话追问部位、持续时间、瘙痒程度和用药情况，让就医前的准备更有条理。</p>
+          <span class="value-icon"><ion-icon name="layers-outline"></ion-icon></span>
+          <h2>跨模态动态融合</h2>
+          <p>EfficientNet-B3 提取局部病灶细节，Transformer 抽取全局语义，门控机制按需融合两种特征，兼顾精度与部署成本。</p>
         </article>
       </section>
 
@@ -150,11 +150,24 @@ import AppNavbar from '../components/AppNavbar.vue';
   line-height: 1.9;
 }
 
-.about-actions {
+.about-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 26px;
+  gap: 8px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.about-tags li {
+  padding: 6px 14px;
+  border: 1px solid var(--ai-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ai-primary);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 
 .about-hero-card {
@@ -421,11 +434,6 @@ import AppNavbar from '../components/AppNavbar.vue';
 
   .about-hero-copy h1 {
     font-size: clamp(32px, 9vw, 42px);
-  }
-
-  .about-actions .ai-primary-btn,
-  .about-actions .ai-ghost-btn {
-    width: 100%;
   }
 
   .flow-head {

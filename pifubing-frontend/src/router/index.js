@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import { ElMessage } from 'element-plus';
+import Homene from '../views/Homene.vue';
 import Picture from '../views/Picture.vue';
 
 // 需要登录才能访问的路由路径（白名单）
@@ -8,11 +9,11 @@ const REQUIRES_AUTH_PATHS = ['/home', '/Summarize', '/doctor'];
 const router = createRouter({
   history: createWebHashHistory(import.meta.env.BASE_URL),
   routes: [
-    //首页（未登录可直接访问，展示示例数据）
+    //平台介绍（未登录用户打开前端默认进入的介绍页）
     {
       path: '/',
-      name: 'home',
-      component: () => import('../views/home.vue'),
+      name: '平台介绍',
+      component: Homene,
     },
 
     //登录
@@ -45,7 +46,7 @@ const router = createRouter({
     {
       path: '/Picture',
       name: '图片廊',
-      component: () => import('../views/Picture.vue'),
+      component: Picture,
     },
 
     {

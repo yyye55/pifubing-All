@@ -20,10 +20,26 @@ func CreateChat(db *gorm.DB, chat *Chat) error {
 }
 
 func UpdateChat(db *gorm.DB, chat *Chat) error {
-	if err := db.Where("id = ?", chat.ID).Updates(chat).Error; err != nil {
+	// 必须同时校验 user_id，避免通过猜测 chat_id 修改其他用户的对话。
+	if err := db.Where("id = ? AND user_id = ?", chat.ID, chat.User_id).
+		Updates(chat).Error; err != nil {
 		return err
 	}
 	return nil
+}
+
+// UpdateChatNameIfDefault 只在对话仍是默认标题（“新对话”或空）时写入自动标题。
+// 条件里同时校验 user_id 和当前名称：用户已经手动改名时不会覆盖。
+// 返回 updated=false 表示对话不存在、不属于该用户，或标题已被用户修改。
+func UpdateChatNameIfDefault(db *gorm.DB, chatID, userID int, name string) (bool, error) {
+	result := db.Model(&Chat{}).
+		Where("id = ? AND user_id = ? AND (name = ? OR name = '' OR name IS NULL)",
+			chatID, userID, "新对话").
+		Update("name", name)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func CheckChat(db *gorm.DB, user_id int, page int, size int) ([]Chat, int64, error) {

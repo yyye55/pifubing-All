@@ -225,6 +225,15 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// 密码强度：至少 6 位
+	if len(input.Password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "密码长度至少为 6 位",
+		})
+		return
+	}
+
 	// 获取验证码
 	code := input.Code
 	if code == "" {
@@ -400,6 +409,12 @@ func Forget_password(c *gin.Context) {
 	_, err := VerifyCode(input.Email, input.Code)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": err.Error()})
+		return
+	}
+
+	// 密码强度：至少 6 位
+	if len(input.Password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "密码长度至少为 6 位"})
 		return
 	}
 
@@ -1155,6 +1170,45 @@ func Update_chat(c *gin.Context) {
 
 }
 
+type AutoTitleChatInput struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Auto_title_chat 在用户发出首条问题后，把默认标题“新对话”改成问题摘要。
+// 只在数据库中的标题仍为默认值时更新，用户手动改过标题不会被覆盖。
+func Auto_title_chat(c *gin.Context) {
+	userID, err := ValidateToken(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	var input AutoTitleChatInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": err.Error()})
+		return
+	}
+
+	input.Name = strings.TrimSpace(input.Name)
+	if input.ID <= 0 || input.Name == "" || len([]rune(input.Name)) > 30 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "标题参数无效"})
+		return
+	}
+
+	updated, err := models.UpdateChatNameIfDefault(dao.DB, input.ID, userID, input.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "自动更新对话标题失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "自动标题处理完成",
+		"updated": updated,
+	})
+}
+
 type Delete_Chat_input struct {
 	User_id int `json:"user_id"`
 	Chat_id int `json:"chat_id"`
@@ -1813,6 +1867,13 @@ func CheckImagesDescription(c *gin.Context) {
 	})
 }
 
+// PredictionCandidate 是分类模型返回的单个候选病种。
+// 置信度在 Python 侧是 0~1，Go 返回给前端前会换算成百分比。
+type PredictionCandidate struct {
+	Prediction string  `json:"prediction"`
+	Confidence float64 `json:"confidence"`
+}
+
 // BaseResponse 结构体定义，严格按照图片中的字段
 type BaseResponse struct {
 	Prediction   string  `json:"prediction"`    // 对应图片中的 "prediction"
@@ -1820,6 +1881,14 @@ type BaseResponse struct {
 	ResultSearch string  `json:"result_search"` // 对应图片中的 "result_search"
 	DescSearch   string  `json:"desc_search"`   // 对应图片中的 "desc_search"`
 	Weight       string  `json:"weight"`        // 对应图片中的 "weight"`
+	// 以下字段由 Python /analyze 新增；旧版服务不返回时分别是 nil / 空切片，
+	// 按“没有质量警告、没有候选”兼容处理。
+	Candidates     []PredictionCandidate `json:"candidates"`
+	QualityOK      *bool                 `json:"quality_ok"`
+	QualityReasons []string              `json:"quality_reasons"`
+	// 视觉模型提取的形态学结构；失败时为空对象，前端和提示词按“无结构信息”处理。
+	Structure        map[string]interface{} `json:"structure"`
+	StructureSummary string                 `json:"structure_summary"`
 }
 
 //func Ceshi(c *gin.Context) {
@@ -2424,6 +2493,13 @@ func PredictImage(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("保存文件失败: %v", err)})
 			return
 		}
+		// 无论后续成功还是被质量/置信度门槛拦下，都清理临时文件，
+		// 避免 code:201/202 提前返回时在 ./temp 里堆积图片。
+		defer func() {
+			if err := os.Remove(localFilePath); err != nil {
+				fmt.Printf("删除上传文件失败: %v\n", err)
+			}
+		}()
 
 		// 判断是否是一个压缩包
 		if ext == ".zip" {
@@ -2481,9 +2557,27 @@ func PredictImage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "解析图片预测响应失败"})
 		return
 	}
+	// 图片质量不合格时直接提示重拍，不再让模型硬猜；
+	// QualityOK 为 nil 说明是旧版 Python 服务，按合格处理，保持兼容。
+	if response.QualityOK != nil && !*response.QualityOK {
+		reason := strings.Join(response.QualityReasons, "；")
+		if reason == "" {
+			reason = "图片不够清晰或没有明显皮肤区域"
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"code":  202,
+			"error": "图片质量不足，请重新拍摄：" + reason,
+		})
+		return
+	}
+
 	confidence := response.Confidence * 100
 	confidence = math.Round(confidence*100) / 100 // 保留两位小数
 	response.Confidence = confidence
+	// 候选病种的置信度也统一换算成百分比，前端可以直接展示。
+	for i := range response.Candidates {
+		response.Candidates[i].Confidence = math.Round(response.Candidates[i].Confidence*10000) / 100
+	}
 	fmt.Println(response.Confidence)
 	fmt.Println(confidence)
 	fmt.Println(response)
@@ -2501,14 +2595,7 @@ func PredictImage(c *gin.Context) {
 		"data":    response,
 		"user_id": userID,
 		"url":     url,
-	})
-	//删除上传的文件
-	if localFilePath != "" {
-		err := os.Remove(localFilePath)
-		if err != nil {
-			fmt.Printf("删除上传文件失败: %v\n", err)
-		}
-	}
+	}) // 临时文件由函数开头的 defer 统一清理
 }
 
 // BaseResponse 结构体定义，严格按照图片中的字段
@@ -2519,7 +2606,9 @@ type AskData struct {
 	ResultSearch string  `json:"result_search"` // 对应图片中的 "result_search"
 	DescSearch   string  `json:"desc_search"`   // 对应图片中的 "desc_search"`
 	Weight       string  `json:"weight"`        // 对应图片中的 "weight"`
-	Url          string  `json:"url"`           //图片地址
+	Candidates       []PredictionCandidate `json:"candidates"`        // 图片模型的 top-k 候选，前端原样透传
+	StructureSummary string                `json:"structure_summary"` // 视觉模型提取的形态学结构摘要
+	Url              string                `json:"url"`               //图片地址
 	Chat_id      int     `json:"chat_id"`
 	User_id      int     `json:"user_id"`
 	Model        string  `json:"model"`
@@ -2548,8 +2637,24 @@ func PredictText(c *gin.Context) {
 	history, _ := models.Rdb.LRange(ctx, conversationKey, -2, -1).Result()
 	historyText := strings.Join(history, "\n")
 	fmt.Println(historyText)
+	// 把 top-3 候选一起交给大模型，避免只盯着 top-1 一个病名。
+	candidateText := "无"
+	if len(input.Candidates) > 0 {
+		parts := make([]string, 0, len(input.Candidates))
+		for _, candidate := range input.Candidates {
+			parts = append(parts, fmt.Sprintf("%s（%.2f%%）", candidate.Prediction, candidate.Confidence))
+		}
+		candidateText = strings.Join(parts, "、")
+	}
+	// 视觉模型只提供形态描述；为空时明确写“无”，避免提示词出现空行歧义。
+	structureText := strings.TrimSpace(input.StructureSummary)
+	if structureText == "" {
+		structureText = "无"
+	}
 	fullConversation := fmt.Sprintf(
 		"\n模型检索: 用户的皮肤病图片经过模型分类后，得到预测结果【%s】和预测置信度【%.2f%%】。\n"+
+			"模型候选结果（按概率从高到低）: %s\n"+
+			"图像结构观察（仅形态描述，不含诊断）: %s\n"+
 			"通过知识库检索，获取到以下信息:\n"+
 			"🔹 预测结果检索内容: %s\n"+
 			"🔹 用户描述检索内容: %s\n"+
@@ -2557,6 +2662,8 @@ func PredictText(c *gin.Context) {
 			"结合用户描述:\n%s",
 		input.Prediction,
 		input.Confidence,
+		candidateText,
+		structureText,
 		input.ResultSearch,
 		input.DescSearch,
 		input.Weight,

@@ -2,6 +2,7 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import zipfile
 import os
@@ -14,7 +15,8 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from lang_faiss import SkinDiseaseSearch
 from des import SkinDisease
-from test import predict_images
+from test import predict_images, check_image_quality
+from vision_structure import describe_image_structure
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -391,13 +393,43 @@ async def upload_and_predict(image: UploadFile = File(...), conversation: str = 
         if not image_paths:
             return JSONResponse(status_code=400, content={"error": "文件处理失败"})
 
-        # 执行预测
-        predict_result = predict_and_search_images(image_paths)
+        # 先做质量检测：任一张合格即放行，zip 多图里一张模糊不拖累整包。
+        quality_results = [check_image_quality(path) for path in image_paths]
+        quality_ok = any(item["ok"] for item in quality_results)
+        quality_reasons = []
+        if not quality_ok:
+            for item in quality_results:
+                for reason in item["reasons"]:
+                    if reason not in quality_reasons:
+                        quality_reasons.append(reason)
+            logging.info(f"图片质量不合格: {quality_reasons}")
+            return {
+                "predicted_class": None,
+                "prediction": None,
+                "confidence": 0.0,
+                "candidates": [],
+                "result_search": "",
+                "desc_search": "",
+                "weight": "1.0",
+                "quality_ok": False,
+                "quality_reasons": quality_reasons,
+                "structure": {},
+                "structure_summary": "",
+            }
+
+        # 本地分类和视觉结构并行：视觉接口慢/失败时只降级结构信息，
+        # 不影响本地分类结果和后续问诊。
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            predict_future = pool.submit(predict_and_search_images, image_paths)
+            structure_future = pool.submit(describe_image_structure, image_paths[0])
+            predict_result = predict_future.result()
+            structure = structure_future.result()
         if not predict_result:
             return JSONResponse(status_code=500, content={"error": "图片预测失败"})
 
         predicted_class = predict_result["final_class"]
         confidence = float(predict_result["final_confidence"])
+        candidates = predict_result.get("candidates", [])
 
         # 根据置信度决定“名称检索”和“描述检索”的权重
         weight = 1.0
@@ -410,7 +442,16 @@ async def upload_and_predict(image: UploadFile = File(...), conversation: str = 
         desc_info = ""
         search_engine, search = initialize_retrieval()
         if search_engine is not None and search is not None:
-            name_info = retrieve_information(search_engine, predicted_class)
+            # top-3 每个候选都检索一份资料，供大模型在候选之间做判断，
+            # 而不是只拿到 top-1 一个病名。
+            info_parts = []
+            for candidate in candidates[:3]:
+                info = retrieve_information(search_engine, candidate["prediction"])
+                if info:
+                    info_parts.append(
+                        f"【{candidate['prediction']}（{candidate['confidence']:.2%}）】\n{info}"
+                    )
+            name_info = "\n\n".join(info_parts)
             if conversation:
                 desc_info = retrieve_information(search, conversation, k=2)
 
@@ -419,9 +460,14 @@ async def upload_and_predict(image: UploadFile = File(...), conversation: str = 
             "predicted_class": predicted_class,
             "prediction": predicted_class,
             "confidence": confidence,
+            "candidates": candidates,
             "result_search": name_info,
             "desc_search": desc_info,
             "weight": f"{weight}",
+            "quality_ok": True,
+            "quality_reasons": [],
+            "structure": structure,
+            "structure_summary": structure.get("summary", "") if isinstance(structure, dict) else "",
         }
     except Exception as e:
         logging.error(f"预测接口错误: {str(e)}")

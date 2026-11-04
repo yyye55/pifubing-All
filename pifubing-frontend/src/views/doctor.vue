@@ -5,10 +5,9 @@
     <main class="cases-main">
       <section class="cases-hero">
         <span class="ai-eyebrow"><span class="ai-pulse"></span> 皮肤健康知识库</span>
-        <h1>常见皮肤问题，<br><em>先从了解开始</em></h1>
+        <h1>常见皮肤问题，<br><em>先从了解开始。</em></h1>
         <p>
-          下面整理了 4 类常见皮肤表现。点击任一病例，可以直接带着你的症状进入 AI 问诊，
-          让描述更具体、沟通更高效。
+          下面整理了 4 类常见皮肤表现。点击任一病例，可以直接带着你的症状进入 AI 问诊，让描述更具体、沟通更高效。
         </p>
       </section>
 
@@ -16,9 +15,8 @@
         <RouterLink to="/home" class="case-card">
           <div class="case-image"><img src="../assets/图片3.png" alt="玫瑰糠疹" /></div>
           <div class="case-body">
-            <span class="case-tag">红斑、脱屑</span>
             <h3>玫瑰糠疹</h3>
-            <p>常见于躯干和四肢近端，常表现为椭圆形红斑，表面可有细碎鳞屑。</p>
+            <p>红斑、脱屑，常见于躯干和四肢近端，常表现为椭圆形红斑，表面可有细碎鳞屑。</p>
             <span class="case-link">咨询 AI <ion-icon name="arrow-forward-outline"></ion-icon></span>
           </div>
         </RouterLink>
@@ -26,9 +24,8 @@
         <RouterLink to="/home" class="case-card">
           <div class="case-image"><img src="../assets/图片4.png" alt="体癣" /></div>
           <div class="case-body">
-            <span class="case-tag">环状、瘙痒</span>
             <h3>体癣</h3>
-            <p>由真菌感染引起，常见环状红斑、边缘隆起，中心区域可逐渐消退。</p>
+            <p>环状、瘙痒、由真菌感染引起，常见环状红斑、边缘隆起，中心区域可逐渐消退。</p>
             <span class="case-link">咨询 AI <ion-icon name="arrow-forward-outline"></ion-icon></span>
           </div>
         </RouterLink>
@@ -36,9 +33,8 @@
         <RouterLink to="/home" class="case-card">
           <div class="case-image"><img src="../assets/图片2.png" alt="毛细血管扩张" /></div>
           <div class="case-body">
-            <span class="case-tag">红血丝、敏感</span>
             <h3>毛细血管扩张</h3>
-            <p>面部或鼻翼出现可见的红血丝，常与皮肤屏障受损、日晒或敏感相关。</p>
+            <p>红血丝、敏感，面部或鼻翼出现可见的红血丝，常与皮肤屏障受损、日晒或敏感相关。</p>
             <span class="case-link">咨询 AI <ion-icon name="arrow-forward-outline"></ion-icon></span>
           </div>
         </RouterLink>
@@ -47,9 +43,7 @@
           <div class="case-image"><img src="../assets/图片1.png" alt="荨麻疹" /></div>
           <div class="case-body">
             <h3>荨麻疹</h3>
-            <p>
-              <span class="case-tag">风团、剧痒</span>
-              突然出现的风团样皮疹，常伴明显瘙痒，可能与过敏、感染或环境因素有关。
+            <p>风团、剧痒，突然出现的风团样皮疹，常伴明显瘙痒，可能与过敏、感染或环境因素有关。
             </p>
             <span class="case-link">咨询 AI <ion-icon name="arrow-forward-outline"></ion-icon></span>
           </div>
@@ -157,27 +151,7 @@ import AppNavbar from '../components/AppNavbar.vue';
   padding: 18px;
 }
 
-.case-tag {
-  display: inline-block;
-  margin-bottom: 8px;
-  padding: 4px 9px;
-  border-radius: 99px;
-  background: var(--ai-primary-soft);
-  color: var(--ai-primary);
-  font-size: 10px;
-  font-weight: 700;
-}
 
-/* 独立标签不要被 flex 拉伸成整行 */
-.case-body > .case-tag {
-  align-self: flex-start;
-}
-
-/* 标签移入描述段落后，改成行内胶囊并与正文留出间距 */
-.case-body p .case-tag {
-  margin: 0 6px 0 0;
-  vertical-align: middle;
-}
 
 .case-body h3 {
   margin: 0 0 7px;

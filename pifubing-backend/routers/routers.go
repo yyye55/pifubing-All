@@ -74,6 +74,9 @@ func SetupRouter() *gin.Engine {
 	// 修改聊天框名称接口
 	studentsGroup.POST("/Update_chat", controller.Update_chat)
 
+	// 首条提问后自动生成对话标题（仅标题仍为“新对话”时生效）
+	studentsGroup.POST("/Auto_title_chat", controller.Auto_title_chat)
+
 	// 删除聊天框接口
 	studentsGroup.DELETE("/Delete_chat", controller.Delete_chat)
 

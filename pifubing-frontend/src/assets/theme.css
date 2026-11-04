@@ -609,9 +609,6 @@ header .btnLogin-popups {
 
 .auth-main--forgot .input-box {
   margin: 8px 0;
-}
-
-.auth-main--forgot .input-field {
   height: 48px;
 }
 
@@ -656,56 +653,45 @@ header .btnLogin-popups {
   font-size: 14px;
 }
 
-/* 输入行：label 在输入框左侧外部，输入框占满剩余宽度 */
+/* 输入行：label 固定在左侧，输入区占满剩余宽度 */
 .auth-card .input-box {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
-  height: auto;
-  margin: 12px 0;
-  border-bottom: 0;
-  background: transparent;
-}
-
-/* 字段名展示在输入框左侧外部，不进入输入框内部 */
-.auth-card .input-box > label {
-  position: static !important;
-  top: auto !important;
-  left: auto !important;
-  transform: none !important;
-  flex: 0 0 76px;
-  margin: 0;
-  color: var(--ai-ink-soft) !important;
-  font-size: 14px !important;
-  font-weight: 600 !important;
-  text-align: right;
-  white-space: nowrap;
-  transition: none !important;
-}
-
-/* 输入框本体：独立的带边框容器，label 不在其中 */
-.auth-card .input-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
   height: 52px;
+  margin: 12px 0;
   padding: 0 14px;
   border: 1px solid var(--ai-line) !important;
+  border-bottom: 1px solid var(--ai-line) !important;
   border-radius: 14px;
   background: #f8fcfb !important;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-.auth-card .input-field:focus-within {
+.auth-card .input-box:focus-within {
   border-color: rgba(23, 184, 166, 0.7) !important;
   background: #fff !important;
   box-shadow: 0 0 0 4px rgba(23, 184, 166, 0.12);
 }
 
-.auth-card .input-field input {
+/* 字段名固定展示在输入框内部左侧，不再是浮动 label */
+.auth-card .input-box > label {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  transform: none !important;
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--ai-ink-soft) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  white-space: nowrap;
+  transition: none !important;
+}
+
+.auth-card .input-box input {
   flex: 1;
   min-width: 0;
   width: auto;

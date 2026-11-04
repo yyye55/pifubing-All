@@ -116,7 +116,7 @@ onMounted(() => {
         </aside>
       </section>
 
-      <!-- 主内容：图鉴 + 问诊准备，形成清晰的两栏信息层级 -->
+      <!-- 主内容：皮肤图鉴（登录后首页只保留工具性内容，"问诊前准备"已移到平台介绍页） -->
       <section class="dashboard-grid">
         <div class="dashboard-card carousel-card">
           <div class="section-head">
@@ -148,36 +148,6 @@ onMounted(() => {
             </el-carousel-item>
           </el-carousel>
           <p class="gallery-note">图示为医学示意图，仅用于健康科普，不作为诊断依据。</p>
-        </div>
-
-        <aside class="dashboard-card preparation-card">
-          <h2 class="ai-section-title">问诊前准备</h2>
-          <p class="ai-section-sub">准备得越充分，建议越贴合</p>
-          <ul class="check-list">
-            <li><span>01</span><div><strong>自然光下拍摄</strong><small>避免美颜、滤镜和强反光</small></div></li>
-            <li><span>02</span><div><strong>补充症状描述</strong><small>出现部位、持续时间、是否瘙痒</small></div></li>
-            <li><span>03</span><div><strong>说明用药情况</strong><small>近期是否使用药膏或抗过敏药</small></div></li>
-          </ul>
-          <RouterLink to="/home" class="side-cta">
-            上传照片开始分析
-            <ion-icon name="arrow-forward-outline"></ion-icon>
-          </RouterLink>
-        </aside>
-      </section>
-
-      <!-- 服务说明：保留原有业务介绍，改为可读性更高的卡片 -->
-      <section class="dashboard-card about-card">
-        <div class="about-copy">
-          <h2 class="ai-section-title">AI 皮肤问诊，如何帮助你？</h2>
-          <p>
-            AI 皮肤问诊利用图像识别与皮肤科知识库，辅助你理解皮肤问题的可能方向。
-            它不会替代医生，但可以帮你在就医前整理症状、减少焦虑，并在需要时提醒你及时线下就诊。
-          </p>
-        </div>
-        <div class="about-metrics">
-          <div><strong>图像</strong><span>患处照片初步分类</span></div>
-          <div><strong>知识库</strong><span>名称 / 概述 / 症状 / 治疗</span></div>
-          <div><strong>对话</strong><span>连续追问与护理建议</span></div>
         </div>
       </section>
 
@@ -313,7 +283,7 @@ onMounted(() => {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  grid-template-columns: 1fr;
   gap: 20px;
   margin-top: 28px;
 }
@@ -433,123 +403,6 @@ onMounted(() => {
   background: var(--ai-primary);
 }
 
-.preparation-card {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-}
-
-.check-list {
-  list-style: none;
-  margin: 16px 0 20px;
-  padding: 0;
-  display: grid;
-  gap: 12px;
-}
-
-.check-list li {
-  display: flex;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 14px;
-  background: #f7fbfa;
-}
-
-.check-list li > span {
-  flex: 0 0 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--ai-primary-soft);
-  color: var(--ai-primary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.check-list strong {
-  display: block;
-  color: var(--ai-ink);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.check-list small {
-  color: var(--ai-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.side-cta {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 13px 15px;
-  border-radius: 13px;
-  background: var(--ai-primary-soft);
-  color: var(--ai-primary);
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 650;
-  transition: background 0.2s ease;
-}
-
-.side-cta:hover {
-  background: #d4eeea;
-}
-
-.about-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
-  gap: 30px;
-  align-items: center;
-  margin-top: 20px;
-  padding: clamp(24px, 4vw, 40px);
-  background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.98), rgba(240, 250, 247, 0.98)),
-    #fff;
-}
-
-.about-copy h2 {
-  margin: 14px 0 10px;
-}
-
-.about-copy p {
-  margin: 0 0 20px;
-  color: var(--ai-ink-soft);
-  font-size: 14px;
-  line-height: 1.85;
-}
-
-.about-metrics {
-  display: grid;
-  gap: 10px;
-}
-
-.about-metrics > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--ai-line);
-  border-radius: 14px;
-  background: #fff;
-}
-
-.about-metrics strong {
-  color: var(--ai-primary);
-  font-size: 16px;
-}
-
-.about-metrics span {
-  color: var(--ai-muted);
-  font-size: 12px;
-  text-align: right;
-}
-
 .disease-library {
   margin-top: 34px;
 }
@@ -630,8 +483,7 @@ onMounted(() => {
 
 @media (max-width: 980px) {
   .dashboard-hero,
-  .dashboard-grid,
-  .about-card {
+  .dashboard-grid {
     grid-template-columns: 1fr;
   }
 
@@ -659,8 +511,7 @@ onMounted(() => {
     margin-top: 20px;
   }
 
-  .carousel-card,
-  .preparation-card {
+  .carousel-card {
     padding: 18px;
   }
 

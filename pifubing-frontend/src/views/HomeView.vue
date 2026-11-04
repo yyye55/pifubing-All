@@ -44,7 +44,7 @@ const handleLogin = async () => {
             ElMessage.success('登录成功，正在跳转...');
             loadUserData(token); // 获取用户数据
             setTimeout(() => {
-                router.push('/doctor');
+                router.push('/Picture'); // 登录成功后进入图鉴首页
             }, 1200);
         } else {
             ElMessage.error(response.data.message || '请检查你的账号或密码是否正确');
@@ -130,29 +130,25 @@ const loadUserData = async (token) => {  // renamed function
         <form @submit.prevent="handleLogin">
           <div class="input-box">
             <label>账号</label>
-            <div class="input-field">
-              <input type="text" v-model="account" required autocomplete="username" />
-            </div>
+            <input type="text" v-model="account" required autocomplete="username" />
           </div>
 
           <div class="input-box">
             <label>密码</label>
-            <div class="input-field">
-              <input
-                :type="showPassword ? 'text' : 'password'"
-                v-model="password"
-                required
-                autocomplete="current-password"
-              />
-              <button
-                type="button"
-                class="eye-toggle"
-                :aria-label="showPassword ? '隐藏密码' : '显示密码'"
-                @click="showPassword = !showPassword"
-              >
-                <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
-              </button>
-            </div>
+            <input
+              :type="showPassword ? 'text' : 'password'"
+              v-model="password"
+              required
+              autocomplete="current-password"
+            />
+            <button
+              type="button"
+              class="eye-toggle"
+              :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+              @click="showPassword = !showPassword"
+            >
+              <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+            </button>
           </div>
 
           <p v-if="formError" class="error">{{ formError }}</p>

@@ -171,6 +171,129 @@ export default {
       }
     },
 
+    // 从用户第一条问题中提取对话标题：去掉客套话、问句和建议类内容，
+    // 只保留“部位 + 主要症状”，再压缩成短语。标题不参与问诊内容。
+    deriveChatTitle(text, hasImage) {
+      const raw = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!raw) return hasImage ? '患处图片问诊' : '';
+
+      let title = raw;
+      const leadingPatterns = [
+        /^(医生|大夫|专家)?(您好|你好)(医生|大夫|专家)?[，,。！!：:\s]*/,
+        /^(请问|我想问一下|想咨询一下|麻烦问一下)[，,。！!：:\s]*/,
+      ];
+      // 连续去掉“医生您好，请问……”这类开头，避免标题只剩客套话。
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const pattern of leadingPatterns) {
+          const next = title.replace(pattern, '');
+          if (next !== title) {
+            title = next;
+            changed = true;
+          }
+        }
+      }
+
+      // 问句、求医建议和情绪表达不进入标题，只保留症状描述。
+      const questionTail = /[，,、]?(可能是什么|是什么.{0,4}病|什么病|什么原因|怎么回事|怎么办|怎么治疗|如何治疗|需要去医院|要不要去医院|需要就医|要不要就医|严重吗|要紧吗|能好吗|会好吗|用什么药|吃什么药|如何用药|需要注意什么|需要注意|怎么护理|如何护理|会不会|传染吗|挂什么科|看什么科|多久能好|正常吗|有问题吗|这是什么).*$/;
+      const filler = /^(谢谢|好的|麻烦了|在线等|急|担心|害怕|焦虑|着急|烦死了)/;
+
+      // 先按标点拆成短句，再逐句去掉问诊尾巴，剩下的才可能是“部位+症状”。
+      const clauses = title
+        .split(/[。！？!?；;\n]+|，|,/)
+        .map((part) => part.replace(questionTail, '').replace(/[。！？!?，,；;：:、\s]+$/g, '').trim())
+        .filter((part) => part && !filler.test(part));
+
+      const bodyParts = ['头皮', '面部', '脸颊', '额头', '眼周', '嘴唇', '颈部', '脖子', '肩', '背', '胸', '腹', '腰', '手臂', '胳膊', '手背', '手心', '手指', '手', '大腿', '小腿', '膝盖', '脚踝', '脚背', '脚', '足', '私处', '外阴', '肛周', '腋下', '腹股沟', '全身', '身上', '皮肤'];
+      const symptoms = ['红疹', '红斑', '红点', '红疙瘩', '丘疹', '疙瘩', '风团', '水疱', '脓疱', '脱屑', '鳞屑', '瘙痒', '痒', '痛', '疼', '红肿', '泛红', '脱皮', '干燥', '皲裂', '渗液', '糜烂', '结痂', '色素', '白斑', '黑痣', '痣', '痘', '痤疮', '掉发', '脱发', '掉头发', '头皮屑', '异味', '白带', '发黄', '边缘', '不规则', '发热', '发烧', '肿'];
+
+      const tidy = (part) => part
+        .replace(/^(我|我们|我的)/, '')
+        .replace(/^(?:(?:平时|平常|一般|现在|目前|最近|这两天|这几天|今天|昨天|刚才|刚刚|该|应该))+/, '')
+        .replace(/最近/g, '')
+        .replace(/突然/g, '')
+        .replace(/特别痒|非常痒|有点痒|有些痒|比较痒|很痒|好痒|瘙痒难忍|痒得(?:厉害|难受|睡不着)/g, '瘙痒')
+        .replace(/^晚上|^夜里|^夜间/, '夜间')
+        .replace(/特别多/g, '多')
+        .replace(/很多|好多|许多|大量|一片|一些|几个/g, '')
+        .replace(/^还|^而且|^并且/, '')
+        .replace(/(起|长|出现)了/g, '$1')
+        .replace(/(胳膊|手臂|腿|脚|背|手|身上)上有个?/g, (_match, part) => (part === '手' ? '手部' : part))
+        .replace(/了$/, '')
+        .replace(/\s+/g, '')
+        .trim();
+
+      const scored = clauses
+        .map((part, index) => ({ text: tidy(part), index }))
+        .filter((item) => item.text)
+        .map((item) => ({
+          ...item,
+          score: (bodyParts.some((word) => item.text.includes(word)) ? 2 : 0)
+            + (symptoms.some((word) => item.text.includes(word)) ? 1 : 0),
+        }));
+
+      // 优先保留有部位/症状的短句，最多两句，保证标题不是整段问题。
+      let picked = scored.filter((item) => item.score > 0).slice(0, 2);
+      if (picked.length === 0) {
+        // 没有识别到部位/症状时，只接受至少两个字的短句，
+        // 避免“这”“那”之类的问句残片被当成标题。
+        const fallback = scored.find((item) => Array.from(item.text).length >= 2);
+        if (fallback) picked = [fallback];
+      }
+      if (picked.length === 0) {
+        return hasImage ? '患处图片问诊' : '皮肤问题咨询';
+      }
+      picked.sort((a, b) => a.index - b.index);
+
+      let result = picked[0].text;
+      if (picked.length === 2) {
+        const second = picked[1].text;
+        const separator = Array.from(second).length <= 6
+          && !bodyParts.some((word) => second.includes(word)) ? '、' : '，';
+        const joined = `${picked[0].text}${separator}${second}`;
+        // 两句合起来太长时只保留第一句，避免又变成整段问题。
+        if (Array.from(joined).length <= 16) {
+          result = joined;
+        }
+      }
+
+      const chars = Array.from(result);
+      return chars.length > 16 ? chars.slice(0, 16).join('') + '…' : result;
+    },
+
+    // 首条消息发出后自动命名：先立即更新界面，再异步条件写入后端。
+    // 只有“当前对话还没有消息、标题仍是新对话、不在编辑标题”时才生效。
+    applyAutoChatTitle({ chatId, text, hasImage, isFirstMessage }) {
+      if (!chatId || !isFirstMessage) return;
+      if (this.isEditingTitle) return;
+      if (this.chatTitle !== '新对话' && this.chatTitle !== '') return;
+
+      const name = this.deriveChatTitle(text, hasImage);
+      if (!name) return;
+
+      // 用户可能已经切到别的对话，只同步对应会话的标题。
+      if (String(this.chatId) === String(chatId)) {
+        this.chatTitle = name;
+      }
+      this.$refs.historyPanel?.updateChatTitle?.(chatId, name);
+
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      // 标题是锦上添花：接口失败只记录日志，不打断发送和问诊。
+      axios.post(
+        '/users/Auto_title_chat',
+        { id: chatId, name },
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).then((response) => {
+        if (response.data?.code !== 200) {
+          console.warn('自动生成对话标题失败:', response.data);
+        }
+      }).catch((error) => {
+        console.warn('自动生成对话标题失败:', error);
+      });
+    },
+
     // 清空输入框状态；输入框本身是不受 v-html 控制的内容，需要手动清 DOM
     clearComposer() {
       this.userMessage = '';
@@ -423,17 +546,40 @@ export default {
           localStorage.setItem('newChatId', newChatId);
         }
 
-        const { prediction, confidence, result_search, desc_search, weight } = data;
+        const {
+          prediction,
+          confidence,
+          result_search,
+          desc_search,
+          weight,
+          candidates,
+          structure_summary,
+        } = data;
         const confidenceNumber = Number(confidence);
         const lowConfidence = Number.isFinite(confidenceNumber) && confidenceNumber < 80;
+        const candidateList = Array.isArray(candidates) ? candidates.filter((item) => item?.prediction) : [];
+        // 展示 top-3 候选，让用户知道模型并非“只认一个病名”；
+        // 置信度后端已经换算成百分比，这里只做两位小数格式化。
+        const candidateText = candidateList
+          .slice(0, 3)
+          .map((item) => {
+            const value = Number(item.confidence);
+            return `${item.prediction} ${Number.isFinite(value) ? value.toFixed(2) : '-'}%`;
+          })
+          .join('、');
         aiMessage.meta =
           `预测结果：${prediction ?? '未知'}，置信度：${confidence ?? '-'}%` +
+          (candidateText ? `；候选：${candidateText}` : '') +
           (lowConfidence ? '（置信度较低，结果仅供参考）' : '');
+        // 视觉模型只描述形态，单独展示，避免和“预测结果”混在一起。
+        aiMessage.structure = structure_summary || '';
 
         this.startImageStream(aiMessage, {
           conversation,
           prediction,
           confidence,
+          candidates: candidateList,
+          structure_summary: structure_summary || '',
           result_search,
           desc_search,
           weight,
@@ -457,6 +603,20 @@ export default {
             `1 重新拍摄患处的照片，确保清晰可见，以便更准确地分析情况。\n` +
             `2 最好去线下找专业医生看看，他们经验丰富，能给出更靠谱的诊断。\n` +
             `3 您可以补充一些症状的详细描述，这样我们可以更好地帮助您分析哦！`,
+          '提示',
+          {
+            confirmButtonText: '确定',
+            type: 'warning',
+          }
+        );
+      } else if (response.data?.code === 202) {
+        // 图片质量门槛未通过：明确告诉用户哪里有问题，并给出可执行的拍摄建议。
+        await ElMessageBox.alert(
+          `${response.data?.error || '图片质量不足，请重新拍摄。'}\n\n` +
+            `拍摄建议：\n` +
+            `1 让患处占画面 40%~60%，不要离得太远；\n` +
+            `2 在自然光下拍摄，关闭闪光灯和美颜；\n` +
+            `3 保持对焦清晰，可换 2~3 个角度再拍。`,
           '提示',
           {
             confirmButtonText: '确定',
@@ -621,6 +781,9 @@ export default {
         }
       }
 
+      // 在插入本条消息前判断是否为该对话的第一问，后续标题只由首问决定。
+      const isFirstMessage = this.messages.length === 0;
+
       // 发送后作废仍在途中的历史记录请求，避免它晚到后覆盖刚发出的消息；
       // 同时为这次发送分配会话序号，供图片问诊识别到旧会话已切走时丢弃响应。
       this.historyRequestId += 1;
@@ -638,6 +801,14 @@ export default {
       this.isThinking = true;
       this.clearComposer();
       this.scrollThreadToBottom();
+
+      // 首条消息立即生成标题；请求放到后台，不阻塞图片/文字问诊。
+      this.applyAutoChatTitle({
+        chatId,
+        text: textOnly,
+        hasImage: Boolean(imageFile),
+        isFirstMessage,
+      });
 
       if (imageFile) {
         await this.sendImageQuestion({ imageFile, conversation, chatId, userId, token, aiMessage, sessionId });
@@ -1013,6 +1184,10 @@ export default {
                   </div>
 
                   <div v-if="message.meta" class="message-meta">{{ message.meta }}</div>
+
+                  <div v-if="message.structure" class="message-structure">
+                    <span class="message-structure-label">图像结构</span>{{ message.structure }}
+                  </div>
 
                   <div v-if="message.thinking" class="thinking-indicator">
                     <span class="thinking-spark" aria-hidden="true">✦</span>
@@ -1779,9 +1954,11 @@ input[type="submit"]:hover {
   align-items: center;
 }
 
-/* 编辑标题时，让输入框在 chat-title 内部居中 */
+/* 编辑标题时，让输入框在 chat-title 内部居中；同时放开宽度限制，让输入框更宽 */
 .chat-title.is-editing {
   justify-content: center;
+  width: min(460px, 68%);
+  max-width: 68%;
 }
 
 .chat-title h2 {
@@ -1856,7 +2033,7 @@ input[type="submit"]:hover {
 }
 
 .chat-title-input {
-  width: 70%;
+  width: 80%;
   height: 34px;
   padding: 0 10px;
   border: 1px solid rgba(23, 184, 166, 0.55);
@@ -2067,6 +2244,24 @@ input[type="submit"]:hover {
   margin-bottom: 8px;
   color: var(--ai-muted);
   font-size: 12px;
+}
+
+.message-structure {
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--ai-accent, #7c9cbf);
+  background: rgba(124, 156, 191, 0.08);
+  border-radius: 6px;
+  color: var(--ai-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.message-structure-label {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--ai-ink-soft);
+  font-weight: 600;
 }
 
 .thinking-indicator {
