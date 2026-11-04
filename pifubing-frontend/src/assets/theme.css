@@ -1,5 +1,5 @@
 /* =========================================================
-   SkinCare AI · 医疗顾问视觉系统
+   AI 皮肤医疗顾问 · 视觉系统
    只在样式层工作：不改接口、路由和业务逻辑。
    ========================================================= */
 
@@ -13,7 +13,7 @@
   --ai-teal: #17b8a6;
   --ai-teal-bright: #3fd6c0;
   --ai-mint: #eaf7f4;
-  --ai-mint-2: #f5fbf9;
+  --ai-mint-2: #ffffff;
   --ai-surface: #ffffff;
   --ai-line: #dcebe7;
   --ai-line-strong: #c5ded8;
@@ -427,10 +427,7 @@ header .btnLogin-popups {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(circle at 8% 12%, rgba(23, 184, 166, 0.16), transparent 34%),
-    radial-gradient(circle at 92% 88%, rgba(15, 111, 122, 0.12), transparent 38%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .auth-topbar {
@@ -480,6 +477,15 @@ header .btnLogin-popups {
   grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.72fr);
   gap: clamp(32px, 6vw, 82px);
   align-items: center;
+}
+
+/* 单栏 auth 页（登录 / 注册 / 忘记密码）：卡片水平 + 垂直居中 */
+.auth-main--single {
+  grid-template-columns: minmax(360px, 520px);
+  justify-content: center;
+  align-content: center;
+  padding: clamp(32px, 6vh, 72px) 0;
+  min-height: calc(100dvh - 64px);
 }
 
 .auth-brand-panel h1 {
@@ -590,9 +596,31 @@ header .btnLogin-popups {
   backdrop-filter: blur(18px);
 }
 
-.auth-card--wide {
-  max-height: min(82vh, 860px);
-  overflow-y: auto;
+/* 忘记密码页：上下间距更紧凑，卡片随内容自然增高；
+   屏幕高度足够时整体仍大致居中，矮屏时整页可上下滚动 */
+.auth-main--forgot {
+  align-content: safe center;
+  padding: clamp(14px, 2.5vh, 28px) 0 24px;
+}
+
+.auth-main--forgot .auth-card {
+  padding: clamp(18px, 2.2vw, 26px);
+}
+
+.auth-main--forgot .input-box {
+  margin: 8px 0;
+}
+
+.auth-main--forgot .input-field {
+  height: 48px;
+}
+
+.auth-main--forgot .btn {
+  margin-top: 14px;
+}
+
+.auth-main--forgot .auth-links {
+  margin-top: 10px;
 }
 
 .auth-card-head {
@@ -628,67 +656,92 @@ header .btnLogin-popups {
   font-size: 14px;
 }
 
+/* 输入行：label 在输入框左侧外部，输入框占满剩余宽度 */
 .auth-card .input-box {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   width: 100%;
-  height: 54px;
-  margin: 14px 0;
-  padding: 0 14px 0 44px;
+  height: auto;
+  margin: 12px 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* 字段名展示在输入框左侧外部，不进入输入框内部 */
+.auth-card .input-box > label {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  transform: none !important;
+  flex: 0 0 76px;
+  margin: 0;
+  color: var(--ai-ink-soft) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  text-align: right;
+  white-space: nowrap;
+  transition: none !important;
+}
+
+/* 输入框本体：独立的带边框容器，label 不在其中 */
+.auth-card .input-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 52px;
+  padding: 0 14px;
   border: 1px solid var(--ai-line) !important;
-  border-bottom: 1px solid var(--ai-line) !important;
   border-radius: 14px;
   background: #f8fcfb !important;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-.auth-card .input-box:focus-within {
+.auth-card .input-field:focus-within {
   border-color: rgba(23, 184, 166, 0.7) !important;
   background: #fff !important;
   box-shadow: 0 0 0 4px rgba(23, 184, 166, 0.12);
 }
 
-.auth-card .input-box .icon {
-  position: absolute;
-  left: 14px;
-  right: auto;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--ai-primary);
-  font-size: 19px;
-  line-height: 1;
-}
-
-.auth-card .input-box input {
-  width: 100%;
+.auth-card .input-field input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
   height: 100%;
   padding: 0 !important;
   color: var(--ai-ink) !important;
   font-size: 15px !important;
   font-weight: 500 !important;
   background: transparent !important;
+  border: 0 !important;
+  outline: none !important;
 }
 
-.auth-card .input-box label {
-  left: 44px;
-  top: 50%;
-  color: var(--ai-muted) !important;
-  font-weight: 500 !important;
-  font-size: 14px !important;
-  transition: all 0.18s ease;
+/* 密码可见性切换小眼睛 */
+.auth-card .eye-toggle {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ai-muted);
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease;
 }
 
-.auth-card .input-box input:focus ~ label,
-.auth-card .input-box input:valid ~ label {
-  top: 7px;
-  transform: none;
-  font-size: 11px !important;
-  color: var(--ai-primary) !important;
-  font-weight: 700 !important;
+.auth-card .eye-toggle:hover {
+  color: var(--ai-primary);
+  background: var(--ai-primary-soft);
 }
 
-.auth-card .input-box input:focus,
-.auth-card .input-box input:valid {
-  padding-top: 10px !important;
+.auth-card .eye-toggle ion-icon {
+  font-size: 18px;
 }
 
 .auth-card .btn,
@@ -719,15 +772,21 @@ header .btnLogin-popups {
   transform: none;
 }
 
+/* 发送验证码按钮：作为输入行右侧的普通 flex 项 */
 .auth-card .btn-verify {
-  top: 50%;
-  right: 8px;
-  transform: translateY(-50%);
+  position: static;
+  top: auto;
+  right: auto;
+  transform: none;
+  flex: 0 0 auto;
   height: 36px;
   padding: 0 12px;
+  border: 0;
   border-radius: 10px;
   background: var(--ai-primary) !important;
+  color: #fff;
   font-size: 12px;
+  cursor: pointer;
 }
 
 .auth-card .remember-forgot {
@@ -758,6 +817,41 @@ header .btnLogin-popups {
   text-decoration: underline;
 }
 
+/* 合并版的底部跳转链接：一边一个 */
+.auth-links {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.auth-links a {
+  color: var(--ai-primary);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.auth-links a:hover {
+  text-decoration: underline;
+}
+
+.auth-links-sep {
+  color: var(--ai-line-strong);
+}
+
+/* 底部链接整体居左（注册页使用） */
+.auth-links--left {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+/* 注册页底部的说明文字（左侧） */
+.auth-links-text {
+  color: var(--ai-muted);
+}
+
 .auth-legal {
   margin: 18px 0 0;
   color: #9bb0b8;
@@ -766,10 +860,11 @@ header .btnLogin-popups {
   text-align: center;
 }
 
+/* 表单字段统一一行一个 */
 .auth-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0 12px;
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 
 .auth-grid .input-box--full {
@@ -881,17 +976,5 @@ header .btnLogin-popups {
   .language-select {
     height: 34px;
     margin-left: auto !important;
-  }
-
-  .auth-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .auth-grid .input-box--full {
-    grid-column: auto;
-  }
-
-  .auth-card--wide {
-    max-height: none;
   }
 }

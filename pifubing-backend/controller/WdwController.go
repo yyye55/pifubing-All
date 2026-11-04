@@ -1169,6 +1169,13 @@ func Delete_chat(c *gin.Context) {
 
 	//手动提取查询参数
 	chat_id, _ := strconv.Atoi(c.Query("chat_id"))
+	if chat_id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":  100,
+			"error": "chat_id 无效",
+		})
+		return
+	}
 
 	input := Delete_Chat_input{
 		User_id: userID,
@@ -1184,19 +1191,46 @@ func Delete_chat(c *gin.Context) {
 	//	return
 	//}
 
-	if err := models.DeleteChat(dao.DB, (*models.Delete_Chat_input)(&input)); err != nil {
+	deleted, err := models.DeleteChat(dao.DB, (*models.Delete_Chat_input)(&input))
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":  100,
-			"error": "无法删除个人聊天框名称",
+			"error": "无法删除个人聊天框",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "删除个人聊天框名称成功",
+		"message": "删除个人聊天框成功",
+		"deleted": deleted,
 	})
 
+}
+
+// 清理当前用户名下没有任何消息的空对话。
+func Delete_empty_chats(c *gin.Context) {
+	userID, err := ValidateToken(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	deletedIDs, err := models.DeleteEmptyChats(dao.DB, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": "无法清理空对话: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":        200,
+		"message":     "清理空对话成功",
+		"deleted":     len(deletedIDs),
+		"deleted_ids": deletedIDs,
+	})
 }
 
 // 发送短信验证码的函数。
@@ -2453,11 +2487,12 @@ func PredictImage(c *gin.Context) {
 	fmt.Println(response.Confidence)
 	fmt.Println(confidence)
 	fmt.Println(response)
-	//置信度小于80时直接退出，告诉前端置信度过低，弹出弹窗
-	if confidence < 80 {
+	// 置信度低于 20% 时判定图片完全不可用；20%~80% 仍继续回答，
+	// 由前端在结果旁标注“结果仅供参考”，避免正常照片全被 80% 门槛拦下。
+	if confidence < 20 {
 		c.JSON(http.StatusOK, gin.H{
 			"code":  201,
-			"error": "Confidence 小于 80，预测结果不可靠"})
+			"error": "Confidence 小于 20，预测结果不可靠"})
 		return
 	}
 
@@ -2561,12 +2596,28 @@ func PredictText(c *gin.Context) {
 	}
 	saveImageMessageAsync(&saveResponse)
 
+	// 回答结束后生成追问，事件流结束前下发给前端渲染成可点击的问题。
+	if suggestions := utils.GenerateFollowups(c.Request.Context(), input.Conversation, fullResponseText); len(suggestions) > 0 {
+		c.SSEvent("suggestions", gin.H{"suggestions": suggestions})
+		c.Writer.Flush()
+	}
+
 	// **存入 Redis**
 	err = utils.SaveConversationToRedis(ctx, models.Rdb, conversationKey, input.Conversation, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": err.Error()})
 		return
 	}
+}
+
+// GetHotQuestions 返回首页空状态的 AI 热门皮肤科问题。
+// 该路由挂在 /users 下，已由 Authenticate 中间件校验登录态。
+// 生成失败时 data 为空，前端会继续使用内置的兜底问题。
+func GetHotQuestions(c *gin.Context) {
+	questions := utils.GenerateHotQuestions(c.Request.Context(), 4)
+	// 每次刷新都可能抽取不同的问题，禁止浏览器缓存该响应。
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": questions})
 }
 
 // PredictOnlyText 处理“只输入文字、不上传图片”的问诊。
@@ -2640,4 +2691,77 @@ func PredictOnlyText(c *gin.Context) {
 			"response": responseForText.GeneratedText,
 		},
 	})
+}
+
+// PredictOnlyTextStream 是 PredictOnlyText 的流式版本。
+// 前端通过 fetch 带 Authorization 请求，Go 把 Python 的 SSE chunk 原样转发给浏览器。
+func PredictOnlyTextStream(c *gin.Context) {
+	userID, err := ValidateToken(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	conversation := strings.TrimSpace(c.Query("conversation"))
+	if conversation == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "conversation 不能为空"})
+		return
+	}
+	chatID, _ := strconv.Atoi(c.Query("chat_id"))
+
+	// 和普通文字问诊保持一致，把病史、过敏情况一起带给大模型。
+	var user models.Disease_information
+	if err := dao.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"code": 100, "error": "用户信息未找到"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "查询用户信息失败"})
+		}
+		return
+	}
+
+	fullConversation := "Q: " + conversation
+	fullConversation += "\n我的患病史: " + user.Medical_history
+	fullConversation += "\n过敏情况: " + user.Allergies
+
+	// 所有校验通过后再切换成 SSE，避免错误响应变成半截事件流。
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	_, _ = c.Writer.Write([]byte(": connected\n\n"))
+	c.Writer.Flush()
+
+	fullText, streamErr := utils.CallTextStream(fullConversation, c)
+	if streamErr != nil {
+		log.Printf("文字流式回答失败: %v", streamErr)
+		c.SSEvent("error", gin.H{"message": "AI 服务暂时不可用，请稍后再试"})
+		c.Writer.Flush()
+		return
+	}
+
+	if strings.TrimSpace(fullText) == "" {
+		c.SSEvent("error", gin.H{"message": "AI 未返回内容，请稍后再试"})
+		c.Writer.Flush()
+		return
+	}
+
+	// 流结束后再保存，历史记录里看到的是完整回答。
+	saveImageMessageAsync(&models.Response{
+		Chat_id:    chatID,
+		User_id:    userID,
+		Ask:        conversation,
+		Message:    fullText,
+		Confidence: "0.00",
+	})
+
+	conversationKey := fmt.Sprintf("conversation:%d", userID)
+	currentMessage := fmt.Sprintf("Q: %s\nA: %s", conversation, fullText)
+	if err := models.Rdb.RPush(ctx, conversationKey, currentMessage).Err(); err == nil {
+		models.Rdb.LTrim(ctx, conversationKey, -2, -1)
+	}
+
+	// 明确告诉前端流已经正常结束。
+	c.SSEvent("done", gin.H{"ok": true})
+	c.Writer.Flush()
 }

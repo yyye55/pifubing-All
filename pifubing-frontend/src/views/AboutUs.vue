@@ -112,9 +112,7 @@ import AppNavbar from '../components/AppNavbar.vue';
 <style scoped>
 .about-page {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 88% 2%, rgba(23, 184, 166, 0.13), transparent 32%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .about-main {

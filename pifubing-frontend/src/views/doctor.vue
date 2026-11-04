@@ -74,9 +74,7 @@ import AppNavbar from '../components/AppNavbar.vue';
 <style scoped>
 .cases-page {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 88% 8%, rgba(23, 184, 166, 0.12), transparent 32%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .cases-main {

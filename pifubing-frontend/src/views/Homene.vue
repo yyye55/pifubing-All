@@ -96,10 +96,7 @@ import AppNavbar from '../components/AppNavbar.vue';
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(circle at 12% 8%, rgba(23, 184, 166, 0.16), transparent 30%),
-    radial-gradient(circle at 88% 22%, rgba(15, 111, 122, 0.13), transparent 34%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .landing-main {

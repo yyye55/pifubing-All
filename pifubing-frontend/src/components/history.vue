@@ -1,6 +1,6 @@
 <template>
   <div class="sidebar-container">
-    <!-- 新建对话：独立主按钮，避免和列表操作混在一起 -->
+    <!-- 新建对话 -->
     <button type="button" class="create-chat-button" @click="createChat()">
       <ion-icon name="add-outline"></ion-icon>
       <span>新建对话</span>
@@ -40,7 +40,7 @@
           v-for="message in filteredMessages"
           :key="message.chat_id"
           class="history-item"
-          :class="{ 'is-active': activeChatId === message.chat_id }"
+          :class="{ 'is-active': String(activeChatId) === String(message.chat_id) }"
           @click="selectHistoryItem(message.chat_id, message.name)"
         >
           <template v-if="editingChatId === message.chat_id">
@@ -120,10 +120,9 @@ export default {
     },
   },
   created() {
+    // 只在进入页面时拉取历史，不再自动创建空对话。
+    // 空对话会在用户第一次发送消息时按需创建，避免每次登录都多出一条“新对话”。
     this.fetchHistory();
-    // 进入页面时只准备一个可用 chat_id，不把它塞进历史列表；
-    // 用户主动点“新建对话”时才在列表顶部创建可见的新条目。
-    this.createChat(false);
   },
   methods: {
     // 切换选中的历史记录项，同时把标题传给右侧聊天头部
@@ -223,13 +222,17 @@ export default {
 
           if (response.data.code === 200) {
             ElMessage.success('聊天记录删除成功');
-            this.messages = this.messages.filter(msg => msg.chat_id !== chatId);
-            if (this.activeChatId === chatId) {
+            // 本地先移除，数据库删除失败时后端会返回非 200，不会走到这里。
+            this.messages = this.messages.filter(
+              msg => String(msg.chat_id) !== String(chatId)
+            );
+            if (String(this.activeChatId) === String(chatId)) {
               this.activeChatId = null;
               this.$emit('chat-deleted', chatId);
-              // 当前对话被删掉后补一个可用 chat_id，避免下一条消息没有归属
-              this.createChat(false);
+              // 不再补建空对话；下一条消息发送时会按需创建新对话。
             }
+            // 删除成功后以后端列表为准刷新，确认该对话已不在库中
+            await this.fetchHistory();
           } else {
             ElMessage.error('删除失败: ' + response.data.message);
           }
@@ -256,6 +259,35 @@ export default {
           : this.$refs.editInput;
         input?.focus?.();
       });
+    },
+
+    // 右侧聊天头部改名后，同步更新侧栏列表
+    // 当前对话可能还没有出现在列表里（新建对话只创建了 chat_id），此时补一条
+    updateChatTitle(chatId, name) {
+      const newName = (name || '').trim();
+      if (!newName) return;
+
+      const targetIndex = this.messages.findIndex(
+        msg => String(msg.chat_id) === String(chatId)
+      );
+
+      if (targetIndex === -1) {
+        this.messages.unshift({
+          chat_id: chatId,
+          type: 'assistant',
+          name: newName,
+          user_id: localStorage.getItem('user_id')
+        });
+      } else {
+        // 用 splice 原地替换，保持列表其他项的顺序不变
+        this.messages.splice(targetIndex, 1, {
+          ...this.messages[targetIndex],
+          name: newName
+        });
+      }
+
+      // 头部正在编辑的对话就是当前对话，同时保持侧栏选中态
+      this.activeChatId = chatId;
     },
 
     // 取消编辑，恢复原标题
@@ -432,7 +464,7 @@ export default {
 /* 按钮悬停时的样式 */
 .create-chat-button:hover {
   background-color: #f1f1f1ce;
-  border-radius: 5px;
+
 }
 
 /* 删除聊天框按钮样式 */

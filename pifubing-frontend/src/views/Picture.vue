@@ -39,14 +39,12 @@ const imageData = ref([]);
 const router = useRouter();
 const token = localStorage.getItem('token');
 
-// 从后端获取数据的方法
+// 从后端获取数据的方法（未登录时跳过，不影响首页展示）
 const fetchData = async () => {
-  try {
-    if (!token) {
-      router.push('/HomeView'); // 如果没有 token，跳转到登录页面
-      return;
-    }
+  const token = localStorage.getItem('token');
+  if (!token) return;
 
+  try {
     const headers = {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'multipart/form-data'
@@ -216,9 +214,7 @@ onMounted(() => {
 <style scoped>
 .dashboard-page {
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 90% 4%, rgba(23, 184, 166, 0.12), transparent 30%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .dashboard-main {

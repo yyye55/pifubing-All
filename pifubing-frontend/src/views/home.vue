@@ -8,7 +8,6 @@ import AppNavbar from '../components/AppNavbar.vue';
 import { API_BASE } from '../apiBase';
 
 const user_id = localStorage.getItem('user_id');
-const chat_id = localStorage.getItem('newChatId') || localStorage.getItem('chat_id') || 0; // 优先读取 newChatId
 
 export default {
   data() {
@@ -23,20 +22,46 @@ export default {
       selectedImage: ref(null),
       imageAnalysisClass: ref(null),
       isChatting: false,
+      isThinking: false, // 是否还在等待 AI 的第一个内容块，控制“思考中”按钮文案
+      activeStreamController: null, // 文字流式回答使用的 AbortController
       userMessage: ref(''), // 用户输入的文本
       messages: ref([]), // 消息数组
       rawText: ref(''), // 存储 Markdown 格式的文本
-      chatId: chat_id, // 初始化 chatId
+      // 不再从 localStorage 恢复旧 chatId：那条对话可能已被删除，
+      // 继续复用会把新消息写进一个不存在的对话。首次发送时按需创建。
+      chatId: 0,
       userId: user_id ,// 初始化 userId
-      chatMessages: [], // 当前聊天框的内容
       chatTitle: '新对话', // 右侧聊天头部展示的当前对话标题
+      // 历史记录请求序号：快速连续切换会话时，只采纳最后一次请求的结果
+      historyRequestId: 0,
+      // 发送会话序号：切换/新建/删除对话后，之前尚未返回的图片问诊响应会被丢弃
+      streamSessionId: 0,
+      isEditingTitle: false, // 是否正在编辑聊天头部标题
+      titleDraft: '', // 标题编辑框中的临时内容
       activeEventSource: null, // 当前正在接收的 SSE 连接
+      // 历史侧栏显隐：用户可折叠让聊天框铺满
+      showHistory: localStorage.getItem('hideChatHistory') !== '1',
+      // 空状态下的快捷提问：label 是界面上展示的短标题，text 是点击后实际发送的完整问题。
+      // 这里先放内置兜底问题，进入页面后会异步替换成 AI 生成的热门问题；
+      // 接口失败或返回为空时继续展示这一组，保证空状态永远有内容可点。
+      quickQuestions: [
+        { icon: 'flame-outline', label: '红疹瘙痒', text: '身上突然起了红疹，很痒，可能是什么原因？需要注意什么？' },
+        { icon: 'water-outline', label: '面部泛红脱屑', text: '面部反复泛红脱屑，平时该怎么护理？' },
+        { icon: 'bandage-outline', label: '手上长水疱', text: '手上长了小水疱，需要去医院吗？' },
+      ],
+      // 页面卸载后，迟到的热门问题响应不再写回组件，避免无意义的状态更新
+      isUnmounted: false,
     };
   },
 
   components: {
     MyComponent,
     AppNavbar
+  },
+
+  mounted() {
+    // 首页快捷提问优先使用 AI 生成的热门问题，失败时保留 data 里的兜底问题。
+    this.loadHotQuestions();
   },
 
   computed: {
@@ -46,23 +71,31 @@ export default {
   },
 
   methods: {
+    // 折叠/展开历史侧栏
+    toggleHistorySidebar() {
+      this.showHistory = !this.showHistory;
+      localStorage.setItem('hideChatHistory', this.showHistory ? '0' : '1');
+    },
+
     handleChatCreated(newChatId) {
       this.chatId = newChatId; // 更新 chatId
       localStorage.setItem('newChatId', newChatId); // 更新 localStorage 中的 chat_id
       // 新建对话后清空右侧聊天区，避免继续显示上一段对话
+      this.stopActiveStreams();
       this.chatTitle = '新对话';
+      this.cancelChatTitleEdit();
       this.messages = [];
-      this.chatMessages = [];
       this.clearComposer();
     },
 
     // 删除当前对话后清空右侧聊天区，避免展示已删除的内容
     handleChatDeleted(chatId) {
       if (String(this.chatId) !== String(chatId)) return;
+      this.stopActiveStreams();
       this.chatId = 0;
       this.chatTitle = '新对话';
+      this.cancelChatTitleEdit();
       this.messages = [];
-      this.chatMessages = [];
       this.clearComposer();
       localStorage.removeItem('newChatId');
     },
@@ -71,6 +104,70 @@ export default {
     handleChatTitleUpdated({ chatId, name }) {
       if (String(this.chatId) === String(chatId)) {
         this.chatTitle = name || '新对话';
+        this.cancelChatTitleEdit();
+      }
+    },
+
+    // 进入标题编辑：只有已经归属于某条对话时才允许改名
+    startEditingTitle() {
+      if (!this.chatId) {
+        ElMessage.info('发送一条消息后即可修改对话标题');
+        return;
+      }
+      // 默认标题“新对话”直接清空，避免用户还要手动删一遍
+      this.titleDraft = this.chatTitle === '新对话' ? '' : this.chatTitle;
+      this.isEditingTitle = true;
+      this.$nextTick(() => {
+        const input = this.$refs.titleInput;
+        if (!input) return;
+        input.focus();
+        input.select();
+      });
+    },
+
+    // 取消编辑，不改动标题
+    cancelChatTitleEdit() {
+      this.isEditingTitle = false;
+      this.titleDraft = '';
+    },
+
+    // 保存头部标题：先关闭编辑态，再请求后端，成功后同步左侧历史列表
+    async saveChatTitle() {
+      // 防止 Enter 触发保存后，输入框卸载又触发一次 blur
+      if (!this.isEditingTitle) return;
+      this.isEditingTitle = false;
+
+      const newName = (this.titleDraft || '').trim();
+      const oldName = this.chatTitle || '新对话';
+      this.titleDraft = '';
+
+      // 空标题或没有实际修改时直接恢复原状，不发请求
+      if (!newName || newName === oldName || !this.chatId) return;
+
+      const token = localStorage.getItem('token');
+      if (!token) {
+        ElMessage.warning('登录状态已失效，请重新登录');
+        this.$router.push('/HomeView');
+        return;
+      }
+
+      try {
+        const response = await axios.post(
+          '/users/Update_chat',
+          { id: this.chatId, name: newName },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (response.data?.code === 200) {
+          this.chatTitle = newName;
+          // 子组件内部更新历史列表；如果当前对话还不在列表里，会补一条
+          this.$refs.historyPanel?.updateChatTitle?.(this.chatId, newName);
+          ElMessage.success('对话名称已更新');
+        } else {
+          ElMessage.error('修改失败: ' + (response.data?.message || '未知错误'));
+        }
+      } catch (error) {
+        console.error('修改聊天记录名称失败:', error);
+        ElMessage.error('修改失败');
       }
     },
 
@@ -263,6 +360,7 @@ export default {
         thinking: true,
         thoughts: '',
         response: '',
+        suggestions: [],
         text: '',
         error: '',
         meta: '',
@@ -270,9 +368,23 @@ export default {
       return this.messages[this.messages.length - 1];
     },
 
+    // 只保留去重后的前3个非空追问，避免后端异常时渲染出无效按钮
+    normalizeSuggestions(list) {
+      if (!Array.isArray(list)) return [];
+      const result = [];
+      list.forEach((item) => {
+        const text = typeof item === 'string' ? item.trim() : '';
+        if (text && !result.includes(text) && result.length < 3) {
+          result.push(text);
+        }
+      });
+      return result;
+    },
+
     failPendingMessage(aiMessage, error) {
       aiMessage.thinking = false;
       aiMessage.error = '抱歉，AI 服务暂时不可用，请稍后再试。';
+      this.isThinking = false;
       this.isChatting = false;
       console.error('聊天失败:', error);
       ElMessage.error('发送失败，请稍后再试');
@@ -280,7 +392,7 @@ export default {
     },
 
     // 图片问诊：先识别图片，再用 SSE 接收大模型的流式回答
-    async sendImageQuestion({ imageFile, conversation, chatId, userId, token, aiMessage }) {
+    async sendImageQuestion({ imageFile, conversation, chatId, userId, token, aiMessage, sessionId }) {
       const formData = new FormData();
       formData.append('conversation', conversation);
       formData.append('chat_id', chatId);
@@ -294,9 +406,14 @@ export default {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
         });
       } catch (error) {
+        if (sessionId !== this.streamSessionId) return;
         this.failPendingMessage(aiMessage, error);
         return;
       }
+
+      // 等待识别期间用户已切换/新建对话，丢弃这条过期响应：
+      // 否则会把 chatId 改回旧会话，后续消息就发错地方了。
+      if (sessionId !== this.streamSessionId) return;
 
       if (response.data?.code === 200) {
         const data = response.data.data || {};
@@ -307,7 +424,11 @@ export default {
         }
 
         const { prediction, confidence, result_search, desc_search, weight } = data;
-        aiMessage.meta = `预测结果：${prediction ?? '未知'}，置信度：${confidence ?? '-'}%`;
+        const confidenceNumber = Number(confidence);
+        const lowConfidence = Number.isFinite(confidenceNumber) && confidenceNumber < 80;
+        aiMessage.meta =
+          `预测结果：${prediction ?? '未知'}，置信度：${confidence ?? '-'}%` +
+          (lowConfidence ? '（置信度较低，结果仅供参考）' : '');
 
         this.startImageStream(aiMessage, {
           conversation,
@@ -327,6 +448,7 @@ export default {
       // 低置信度或失败时撤回“思考中”气泡，只保留用户消息
       const pendingIndex = this.messages.indexOf(aiMessage);
       if (pendingIndex !== -1) this.messages.splice(pendingIndex, 1);
+      this.isThinking = false;
       this.isChatting = false;
 
       if (response.data?.code === 201) {
@@ -360,6 +482,7 @@ export default {
         eventSource.addEventListener('message', (event) => {
           if (!event.data) return;
           aiMessage.thinking = false;
+          this.isThinking = false;
           aiMessage.response += event.data;
           this.scrollThreadToBottom();
         });
@@ -370,11 +493,24 @@ export default {
           this.scrollThreadToBottom();
         });
 
+        // 图片问答的追问由 Go 在回答结束后单独下发
+        eventSource.addEventListener('suggestions', (event) => {
+          if (!event.data) return;
+          try {
+            const payload = JSON.parse(event.data);
+            aiMessage.suggestions = this.normalizeSuggestions(payload?.suggestions);
+          } catch {
+            aiMessage.suggestions = [];
+          }
+          this.scrollThreadToBottom();
+        });
+
         eventSource.addEventListener('error', () => {
           // 后端流式响应正常结束时也会触发 error；主动 close 防止浏览器自动重连
           eventSource.close();
           if (this.activeEventSource === eventSource) this.activeEventSource = null;
           aiMessage.thinking = false;
+          this.isThinking = false;
           if (!aiMessage.response) {
             aiMessage.error = aiMessage.thoughts
               ? '本次只返回了推理过程，请重新发送试试。'
@@ -386,6 +522,62 @@ export default {
       } catch (error) {
         this.failPendingMessage(aiMessage, error);
       }
+    },
+
+    // 进入首页时请求 AI 生成的热门皮肤科问题，成功后替换默认快捷提问。
+    // 这是锦上添花的功能：未登录、接口失败、返回为空或格式不对时都静默保留兜底问题。
+    async loadHotQuestions() {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        // 后端每小时才重新生成一次问题池，平时毫秒级返回；
+        // 只有池子过期后的第一次请求要等大模型，超时留得比后端 45 秒稍长。
+        // 页面上此时已经显示兜底问题，等待不会让用户面对空白区域。
+        const response = await axios.get('/users/hot_questions', {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 50000,
+        });
+        // 页面已经卸载，丢弃这次迟到的响应
+        if (this.isUnmounted) return;
+        if (response.data?.code !== 200) return;
+
+        const list = response.data?.data;
+        if (!Array.isArray(list) || list.length === 0) return;
+
+        // 后端只返回 label/text，图标按顺序轮换，保证界面风格与内置问题一致
+        const icons = ['flame-outline', 'water-outline', 'bandage-outline', 'sparkles-outline'];
+        const questions = list
+          .map((item, index) => {
+            const label = typeof item?.label === 'string' ? item.label.trim() : '';
+            const text = typeof item?.text === 'string' ? item.text.trim() : '';
+            if (!text) return null;
+            return {
+              icon: icons[index % icons.length],
+              label: label || text.slice(0, 8),
+              text,
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 4);
+
+        if (questions.length > 0) {
+          this.quickQuestions = questions;
+        }
+      } catch (error) {
+        // 热门问题不是问诊主流程，失败时不弹提示打扰用户
+        console.warn('获取 AI 热门问题失败，继续使用默认问题:', error);
+      }
+    },
+
+    // 点击快捷提问：把问题写入输入框后直接发送，省去手动输入
+    askSuggestion(text) {
+      if (this.isChatting) return;
+      const box =
+        this.$refs.editableContent || document.querySelector('.textarea-wen');
+      if (box) box.innerText = text;
+      this.userMessage = text;
+      this.handleImageAndChat();
     },
 
     // 图片和文本提交
@@ -416,8 +608,23 @@ export default {
       }
 
       const userId = localStorage.getItem('user_id') || this.userId || 0;
-      const chatId = this.chatId || localStorage.getItem('newChatId') || 0;
+      let chatId = this.chatId || 0;
       const conversation = textOnly || '如何治疗？';
+
+      // 进入页面时不再自动建对话；第一次真正发送消息时再创建，
+      // 避免每次登录都留下一条空的“新对话”，也避免把消息写进已删除的对话。
+      if (!chatId) {
+        chatId = await this.$refs.historyPanel?.createChat?.(true);
+        if (!chatId) {
+          ElMessage.error('创建对话失败，请稍后重试');
+          return;
+        }
+      }
+
+      // 发送后作废仍在途中的历史记录请求，避免它晚到后覆盖刚发出的消息；
+      // 同时为这次发送分配会话序号，供图片问诊识别到旧会话已切走时丢弃响应。
+      this.historyRequestId += 1;
+      const sessionId = ++this.streamSessionId;
 
       this.messages.push({
         sender: 'user',
@@ -428,36 +635,137 @@ export default {
       const aiMessage = this.pushPendingMessage();
 
       this.isChatting = true;
+      this.isThinking = true;
       this.clearComposer();
       this.scrollThreadToBottom();
 
       if (imageFile) {
-        await this.sendImageQuestion({ imageFile, conversation, chatId, userId, token, aiMessage });
+        await this.sendImageQuestion({ imageFile, conversation, chatId, userId, token, aiMessage, sessionId });
         return;
       }
 
-      try {
-        const queryParams = new URLSearchParams({
-          conversation,
-          chat_id: chatId,
-          user_id: userId,
-          model: 'DeepSeek-R1',
-        }).toString();
-        const response = await axios.get(`/predict/only/text?${queryParams}`, {
-          headers: { Authorization: `Bearer ${token}` },
+      // 纯文字问诊走 SSE 流式接口，收到第一个内容块前按钮一直显示“思考中”
+      await this.startTextStream(aiMessage, { conversation, chatId, userId, token });
+    },
+
+    // 读取 SSE 响应，把 AI 回答逐块追加到同一条消息
+    async startTextStream(aiMessage, { conversation, chatId, userId, token }) {
+      const controller = new AbortController();
+      this.activeStreamController = controller;
+      this.isThinking = true;
+
+      const queryParams = new URLSearchParams({
+        conversation,
+        chat_id: chatId,
+        user_id: userId,
+      }).toString();
+
+      const processBlock = (block) => {
+        if (!block.trim()) return;
+
+        let eventName = 'message';
+        const dataLines = [];
+
+        block.split(/\r?\n/).forEach((line) => {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).replace(/^ /, ''));
+          }
         });
 
-        if (response.data?.code === 200) {
+        const rawData = dataLines.join('\n');
+        if (!rawData || rawData === '[DONE]') return;
+
+        let payload = null;
+        try {
+          payload = JSON.parse(rawData);
+        } catch {
+          // 兼容没有 JSON 包裹的纯文本 data
+          payload = null;
+        }
+
+        if (eventName === 'error') {
+          const message = payload?.message || rawData || 'AI 服务暂时不可用，请稍后再试。';
           aiMessage.thinking = false;
-          aiMessage.response = response.data.data?.response || '已收到您的消息';
-        } else {
+          aiMessage.error = message;
+          this.isThinking = false;
+          ElMessage.error(message);
+          return;
+        }
+
+        if (eventName === 'thoughts') {
+          const thoughts = payload?.thoughts || payload?.content || '';
+          if (thoughts) {
+            aiMessage.thoughts += thoughts;
+            this.scrollThreadToBottom();
+          }
+          return;
+        }
+
+        if (eventName === 'done') return;
+
+        if (eventName === 'suggestions') {
+          aiMessage.suggestions = this.normalizeSuggestions(payload?.suggestions);
+          this.scrollThreadToBottom();
+          return;
+        }
+
+        const content = typeof payload?.content === 'string' ? payload.content : rawData;
+        if (!content) return;
+
+        // 第一个内容块到达后才把按钮从“思考中”切回“发送”
+        aiMessage.thinking = false;
+        this.isThinking = false;
+        aiMessage.response += content;
+        this.scrollThreadToBottom();
+      };
+
+      try {
+        const response = await fetch(
+          `${API_BASE}/predict/only/text/stream?${queryParams}`,
+          {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok || !response.body) {
+          throw new Error(`流式接口返回 ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/);
+          buffer = blocks.pop() || '';
+          blocks.forEach(processBlock);
+        }
+
+        buffer += decoder.decode();
+        if (buffer.trim()) processBlock(buffer);
+
+        if (!aiMessage.response && !aiMessage.error) {
           aiMessage.thinking = false;
-          aiMessage.error = response.data?.error || 'AI 服务返回异常，请稍后再试。';
+          aiMessage.error = 'AI 未返回内容，请稍后再试。';
           ElMessage.error(aiMessage.error);
         }
       } catch (error) {
+        if (error.name === 'AbortError') return;
         this.failPendingMessage(aiMessage, error);
       } finally {
+        if (this.activeStreamController === controller) {
+          this.activeStreamController = null;
+        }
+        aiMessage.thinking = false;
+        this.isThinking = false;
         this.isChatting = false;
         this.scrollThreadToBottom();
       }
@@ -494,35 +802,108 @@ export default {
       }
     },
 
+    // 停止当前仍在进行的回答：切换/新建/删除对话时调用，
+    // 避免上一条对话的流式内容继续写进新打开的会话。
+    stopActiveStreams() {
+      // 让所有尚未返回的旧发送请求失效
+      this.streamSessionId += 1;
+      if (this.activeStreamController) {
+        this.activeStreamController.abort();
+        this.activeStreamController = null;
+      }
+      if (this.activeEventSource) {
+        this.activeEventSource.close();
+        this.activeEventSource = null;
+      }
+      this.isChatting = false;
+      this.isThinking = false;
+    },
+
+    // 把后端 image_ask_messages 的“一条问答记录”拆成用户气泡 + AI 气泡，
+    // 这样历史会话与刚发送时的渲染结构完全一致。
+    historyRowsToMessages(rows) {
+      const list = [];
+      (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const ask = typeof row?.ask === 'string' ? row.ask.trim() : '';
+        const answer = typeof row?.message === 'string' ? row.message.trim() : '';
+        // 后端字段名是 url，兼容部分环境返回 materials 的情况
+        const image = row?.url || row?.materials || '';
+
+        if (ask || image) {
+          list.push({
+            sender: 'user',
+            side: 'right',
+            text: ask,
+            image: image || null,
+          });
+        }
+
+        if (answer) {
+          list.push({
+            sender: 'system',
+            side: 'left',
+            thinking: false,
+            thoughts: '',
+            response: answer,
+            suggestions: [],
+            text: '',
+            error: '',
+            meta: '',
+          });
+        }
+      });
+      return list;
+    },
+
     // 历史侧栏选中某个会话时，拉取该会话的消息，并同步右侧标题
     async fetchChatMessages(chatId, name) {
+      // 记录本次请求序号，连续点击多个会话时只渲染最后一次的结果
+      const requestId = ++this.historyRequestId;
+
+      // 切换会话前先停止上一条对话的回答，并立即清空右侧，
+      // 避免加载新记录期间仍显示上一个会话的气泡。
+      this.stopActiveStreams();
+      this.messages = [];
+
       // 选中历史对话后同步当前 chatId，后续发送消息才会写回这条对话
       this.chatId = chatId;
       this.chatTitle = name || '新对话';
+      this.cancelChatTitleEdit();
       localStorage.setItem('newChatId', chatId);
 
       try {
         const response = await axios.get('/users/Check_image_ask_messages', {
-          params: { chat_id: chatId, page: 1, size: 10 },
+          params: { chat_id: chatId, page: 1, size: 50 },
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         });
+        // 期间又切换了别的会话，丢弃这次过期的响应
+        if (requestId !== this.historyRequestId) return;
         if (response.data.code === 200) {
-          this.chatMessages = response.data.data; // 更新 chatMessages 数据
-          console.log('成功获取 chatMessages:', this.chatMessages);
+          this.messages = this.historyRowsToMessages(response.data.data);
+          this.scrollThreadToBottom();
         } else {
           console.error('获取聊天记录失败:', response.data.message);
+          ElMessage.error(response.data.message || '获取聊天记录失败');
         }
       } catch (error) {
+        if (requestId !== this.historyRequestId) return;
         console.error('获取聊天记录失败:', error);
+        ElMessage.error('获取聊天记录失败，请稍后重试');
       }
     }
   },
 
   beforeUnmount() {
+    // 标记已卸载，阻止仍在途中的热门问题请求回写组件状态
+    this.isUnmounted = true;
     // 离开页面时断开流式连接，避免后台继续推流
     if (this.activeEventSource) {
       this.activeEventSource.close();
       this.activeEventSource = null;
+    }
+    if (this.activeStreamController) {
+      this.activeStreamController.abort();
+      this.activeStreamController = null;
     }
   }
 };
@@ -533,18 +914,68 @@ export default {
     <AppNavbar />
 
     <main class="chat-main">
-      <div class="chat-layout">
+      <div class="chat-layout" :class="{ 'chat-layout--full': !showHistory }">
         <MyComponent
+          v-show="showHistory"
+          ref="historyPanel"
           @chat-created="handleChatCreated"
           @chat-selected="fetchChatMessages"
           @chat-title-updated="handleChatTitleUpdated"
           @chat-deleted="handleChatDeleted"
+          @toggle-sidebar="toggleHistorySidebar"
         />
 
         <section id="qwen-chat" class="chat-container">
           <div class="chat-header">
-            <div class="chat-title">
-              <h2 :title="chatTitle">{{ chatTitle || '新对话' }}</h2>
+            <!-- 折叠/展开历史侧栏按钮：始终可见 -->
+            <button
+              type="button"
+              class="sidebar-toggle"
+              :title="showHistory ? '隐藏历史对话' : '展开历史对话'"
+              :aria-label="showHistory ? '隐藏历史对话' : '展开历史对话'"
+              @click="toggleHistorySidebar"
+            >
+              <ion-icon :name="showHistory ? 'menu-outline' : 'menu-open-outline'"></ion-icon>
+            </button>
+
+            <div class="chat-title" :class="{ 'is-editing': isEditingTitle }">
+              <!-- 标题区域点击进入编辑；保存后同时更新头部和左侧历史列表 -->
+              <input
+                v-if="isEditingTitle"
+                ref="titleInput"
+                v-model="titleDraft"
+                class="chat-title-input"
+                maxlength="30"
+                aria-label="修改对话标题"
+                @blur="saveChatTitle"
+                @keydown.enter.prevent="saveChatTitle"
+                @keydown.esc.prevent="cancelChatTitleEdit"
+              />
+              <template v-else>
+                <h2
+                  :title="chatId ? '点击修改对话标题' : chatTitle"
+                  :class="{ 'is-editable': chatId }"
+                  @click="startEditingTitle"
+                >
+                  {{ chatTitle || '新对话' }}
+                </h2>
+                <button
+                  v-if="chatId"
+                  type="button"
+                  class="chat-title-edit"
+                  title="修改对话标题"
+                  aria-label="修改对话标题"
+                  @click="startEditingTitle"
+                >
+                  <ion-icon name="create-outline"></ion-icon>
+                </button>
+              </template>
+            </div>
+
+            <!-- 右侧状态：与左侧对话标题分开，标题过长时自动省略 -->
+            <div class="chat-header-status">
+              <span class="chat-status-dot"></span>
+              <span>AI 在线回复</span>
             </div>
           </div>
 
@@ -552,11 +983,20 @@ export default {
             <div class="chat-thread">
               <div v-if="messages.length === 0" class="chat-empty">
                 <span class="chat-empty-icon"><ion-icon name="sparkles-outline"></ion-icon></span>
-                <h3>把皮肤困扰交给我</h3>
-                <p>可以描述症状，也可以上传患处照片。信息越具体，建议越贴合。</p>
+                <h3>先说说你的皮肤困扰</h3>
+                <p>描述部位、外观和持续时间，或上传一张清晰的患处照片。信息越具体，分析越贴合。</p>
                 <div class="chat-suggestions">
-                  <span>身上突然起红疹很痒</span>
-                  <span>面部反复泛红脱屑</span>
+                  <button
+                    v-for="(item, index) in quickQuestions"
+                    :key="`${item.label}-${index}`"
+                    type="button"
+                    class="chat-suggestion"
+                    :disabled="isChatting"
+                    @click="askSuggestion(item.text)"
+                  >
+                    <ion-icon :name="item.icon"></ion-icon>
+                    <span>{{ item.label }}</span>
+                  </button>
                 </div>
               </div>
 
@@ -599,15 +1039,23 @@ export default {
                   </div>
 
                   <div v-if="message.error" class="message-error">{{ message.error }}</div>
-                </div>
-              </div>
 
-              <!-- 当前聊天框历史只展示一次，避免旧模板在每条消息内重复渲染 -->
-              <div v-if="chatMessages.length > 0" class="chat-history-block">
-                <h3>本次对话记录</h3>
-                <div v-for="(msg, idx) in chatMessages" :key="idx" class="history-message-item">
-                  <p><strong>问题：</strong>{{ msg.ask || '无' }}</p>
-                  <p><strong>回答：</strong>{{ msg.message || '无' }}</p>
+                  <!-- 回答下方的相关追问，点击后直接作为新问题发送 -->
+                  <div v-if="message.suggestions && message.suggestions.length" class="follow-up-questions">
+                    <p class="follow-up-title">你可能还想问</p>
+                    <div class="follow-up-list">
+                      <button
+                        v-for="(question, questionIndex) in message.suggestions"
+                        :key="questionIndex"
+                        type="button"
+                        class="follow-up-chip"
+                        :disabled="isChatting"
+                        @click="askSuggestion(question)"
+                      >
+                        {{ question }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -652,7 +1100,7 @@ export default {
 
                   <button type="submit" :disabled="isChatting" class="btn-inside">
                     <ion-icon :name="isChatting ? 'reload-circle' : 'arrow-redo'"></ion-icon>
-                    <span>{{ isChatting ? '思考中' : '发送' }}</span>
+                    <span>{{ isThinking ? '思考中' : isChatting ? '回答中' : '发送' }}</span>
                   </button>
                 </div>
               </div>
@@ -1235,9 +1683,7 @@ input[type="submit"]:hover {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(circle at 88% 6%, rgba(23, 184, 166, 0.1), transparent 30%),
-    var(--ai-mint-2);
+  background: var(--ai-mint-2);
 }
 
 .chat-main {
@@ -1278,20 +1724,69 @@ input[type="submit"]:hover {
 .chat-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   min-height: 52px;
   padding: 10px 20px;
   border-bottom: 1px solid var(--ai-line);
   background: #fff;
 }
 
+/* 折叠/展开历史侧栏按钮：chat-header 最左侧的小图标 */
+.sidebar-toggle {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--ai-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ai-muted);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--ai-primary);
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  transform: scale(1.05);
+}
+
+.sidebar-toggle:active {
+  transform: scale(0.95);
+}
+
+.sidebar-toggle ion-icon {
+  font-size: 18px;
+}
+
+.chat-layout {
+  transition: gap 0.22s ease;
+}
+
+.chat-layout--full {
+  gap: 0;
+}
+
 .chat-title {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 58%;
   display: flex;
   align-items: center;
 }
 
+/* 编辑标题时，让输入框在 chat-title 内部居中 */
+.chat-title.is-editing {
+  justify-content: center;
+}
+
 .chat-title h2 {
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
   margin: 0 !important;
   overflow: hidden;
@@ -1301,6 +1796,80 @@ input[type="submit"]:hover {
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 标题文字居中，与编辑状态的输入框对齐 */
+  text-align: center;
+}
+
+/* 标题可点击改名，悬浮时给出颜色反馈 */
+.chat-title h2.is-editable {
+  cursor: text;
+  transition: color 0.18s ease;
+}
+
+.chat-title h2.is-editable:hover {
+  color: var(--ai-primary);
+}
+
+.chat-title-edit {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8aa4ac;
+  font-size: 17px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+/* 头部右侧状态标签 */
+.chat-header-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--ai-line);
+  border-radius: 99px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ai-primary);
+}
+
+.chat-title-edit:hover {
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+}
+
+.chat-title-input {
+  width: 70%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(23, 184, 166, 0.55);
+  border-radius: 9px;
+  background: #f7fdfc;
+  color: var(--ai-ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(23, 184, 166, 0.1);
+  /* 输入框内文字居中，与标题展示时的居中效果对齐 */
+  text-align: center;
 }
 
 .box5 {
@@ -1308,6 +1877,8 @@ input[type="submit"]:hover {
   height: auto !important;
   min-height: 0;
   overflow-y: auto;
+  /* 始终预留滚动条宽度：回答变长出现滚动条时，气泡不会突然变窄重排 */
+  scrollbar-gutter: stable;
   padding: 22px !important;
   border-radius: 0 !important;
   background: #f8fcfb !important;
@@ -1356,17 +1927,90 @@ input[type="submit"]:hover {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
-  margin-top: 18px;
+  gap: 9px;
+  margin-top: 20px;
 }
 
-.chat-suggestions span {
-  padding: 7px 12px;
+.chat-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
   border: 1px solid var(--ai-line);
   border-radius: 99px;
   background: #fff;
   color: var(--ai-ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.chat-suggestion:hover:not(:disabled),
+.chat-suggestion:focus-visible:not(:disabled) {
+  border-color: var(--ai-primary);
+  background: var(--ai-primary-soft);
+  color: var(--ai-ink);
+}
+
+.chat-suggestion:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.chat-suggestion ion-icon {
+  flex: 0 0 auto;
+  color: var(--ai-primary);
+  font-size: 15px;
+}
+
+/* AI 回答下方的相关追问 */
+.follow-up-questions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--ai-line);
+}
+
+.follow-up-title {
+  margin: 0 0 8px;
+  color: var(--ai-muted);
   font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.follow-up-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.follow-up-chip {
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--ai-line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ai-ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.follow-up-chip:hover:not(:disabled),
+.follow-up-chip:focus-visible:not(:disabled) {
+  border-color: var(--ai-primary);
+  background: var(--ai-primary-soft);
+  color: var(--ai-ink);
+}
+
+.follow-up-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .chat-message {
@@ -1389,6 +2033,9 @@ input[type="submit"]:hover {
 
 .chat-message.left {
   align-self: flex-start;
+  /* 让 AI 行占满聊天区宽度，气泡的固定宽度才能按容器计算，
+     否则行宽会随内容收缩，流式时气泡仍会被撑大。 */
+  width: 100%;
 }
 
 .message-avatar {
@@ -1409,10 +2056,11 @@ input[type="submit"]:hover {
   max-width: min(720px, 82%);
 }
 
-/* 用户发送的问题气泡可以更宽，长问题不会挤成窄条 */
+/* 用户发送的问题气泡自适应宽度，最宽 400px，超出后自动换行 */
 .chat-message.right .message-body {
-  max-width: min(780px, 88%);
-  min-width: 120px;
+  max-width: min(500px, calc(100% - 40px));
+  min-width: 200px;
+  width: fit-content;
 }
 
 .message-meta {
@@ -1479,6 +2127,11 @@ input[type="submit"]:hover {
 }
 
 .chat-message.left .message-body {
+  /* AI 气泡使用固定宽度，流式输出时不会随文字多少忽宽忽窄；
+     40px 预留给左侧 AI 头像和间距。 */
+  width: min(720px, calc(100% - 40px));
+  max-width: min(720px, calc(100% - 40px));
+  min-height: 62px;
   padding: 16px 18px;
   border: 1px solid rgba(15, 111, 122, 0.14);
   border-radius: 5px 20px 20px 20px;
@@ -1656,36 +2309,6 @@ input[type="submit"]:hover {
   color: var(--ai-muted);
 }
 
-.chat-history-block {
-  margin-top: 10px;
-  padding: 16px;
-  border: 1px dashed var(--ai-line-strong);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.chat-history-block h3 {
-  margin: 0 0 10px;
-  color: var(--ai-ink);
-  font-size: 13px;
-}
-
-.history-message-item {
-  padding: 10px 0;
-  border-top: 1px solid var(--ai-line);
-  color: var(--ai-ink-soft);
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.history-message-item:first-of-type {
-  border-top: 0;
-}
-
-.history-message-item p {
-  margin: 3px 0;
-}
-
 .image-preview {
   display: flex;
   align-items: center;
@@ -1713,22 +2336,22 @@ input[type="submit"]:hover {
 .anniu {
   position: relative;
   width: 100%;
-  padding: 12px 22px 18px;
+  padding: 8px 22px 14px;
   background: #fff;
 }
 
-/* 与 .chat-thread 的 860px 内容列对齐，让输入框和问答区同宽 */
+/* 输入区与 .box5 使用相同左右内边距，composer 占满聊天容器 */
 .chat-form {
   display: block; /* 覆盖旧版横向 flex，避免 .composer 被压缩 */
   width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
 }
 
 .composer {
-  padding: 10px 12px;
+  padding: 6px 10px;
   border: 1px solid var(--ai-line);
-  border-radius: 18px;
+  border-radius: 16px;
   background: #f9fdfc;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -1741,17 +2364,17 @@ input[type="submit"]:hover {
 
 .textarea-wen {
   width: 100% !important;
-  height: 64px !important;
-  min-height: 64px;
-  max-height: 64px;
+  height: 48px !important;
+  min-height: 48px;
+  max-height: 48px;
   overflow-y: auto;
-  padding: 4px 4px 8px !important;
+  padding: 2px 4px 4px !important;
   border: 0 !important;
   border-radius: 0 !important;
   background: transparent !important;
   color: var(--ai-ink) !important;
   font-size: 14px !important;
-  line-height: 1.7;
+  line-height: 1.6;
   resize: none;
   outline: none !important;
   box-shadow: none !important;
@@ -1773,8 +2396,8 @@ input[type="submit"]:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding-top: 8px;
+  gap: 8px;
+  padding-top: 4px;
   border-top: 1px solid var(--ai-line);
 }
 
@@ -1785,16 +2408,16 @@ input[type="submit"]:hover {
 }
 
 .tool-btn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
   color: var(--ai-ink-soft);
-  font-size: 19px;
+  font-size: 17px;
   cursor: pointer;
   transition: background 0.18s ease, color 0.18s ease;
 }
@@ -1821,9 +2444,9 @@ input[type="submit"]:hover {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 82px;
-  height: 38px;
-  padding: 0 16px !important;
+  min-width: 76px;
+  height: 32px;
+  padding: 0 14px !important;
   border: 0;
   border-radius: 11px;
   background: linear-gradient(135deg, var(--ai-primary), var(--ai-teal)) !important;
@@ -1889,9 +2512,9 @@ input[type="submit"]:hover {
   }
 
   .textarea-wen {
-    height: 56px !important;
-    min-height: 56px;
-    max-height: 56px;
+    height: 44px !important;
+    min-height: 44px;
+    max-height: 44px;
   }
 
   .image-preview {
@@ -1901,6 +2524,11 @@ input[type="submit"]:hover {
   .chat-header {
     min-height: 48px;
     padding: 8px 14px;
+  }
+
+  /* 窄屏下隐藏右侧状态，把空间留给对话标题 */
+  .chat-header-status {
+    display: none;
   }
 
   .box5 {

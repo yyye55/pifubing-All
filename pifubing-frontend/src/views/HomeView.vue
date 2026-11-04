@@ -2,25 +2,17 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import axios from 'axios';
+import { ElMessage } from 'element-plus';
+import AppNavbar from '../components/AppNavbar.vue';
 
 // 响应式数据
 const account = ref('');
 const password = ref('');
-const formError = ref(''); // 表单错误提示
-const alertMessage = ref('');
-const showAlert = ref(false);
+const formError = ref(''); // 表单错误提示（内联，不走 ElMessage）
 const loading = ref(false); // 控制加载状态
+const showPassword = ref(false); // 密码可见性切换
 
 const router = useRouter();
-
-// 显示弹框的函数
-const showAlertBox2 = (message) => {
-  alertMessage.value = message;
-  showAlert.value = true;
-  setTimeout(() => {
-    showAlert.value = false; // 3秒后自动隐藏弹框
-  }, 3000);
-};
 
 // 表单验证和登录请求
 const handleLogin = async () => {
@@ -42,25 +34,24 @@ const handleLogin = async () => {
                 'Content-Type': 'application/json',
             },
         });
-console.log(response.data);
         if (response.data.code === 200) {
             const token = response.data.token;
             const user_id = response.data.user_id;
             localStorage.setItem('token', token);
             localStorage.setItem('user_id', user_id);
-            console.log('Token 存储成功:', token); // 添加调试信息
+            console.log('Token 存储成功:', token);
             console.log('user_id 存储成功:', user_id);
-            showAlertBox2('登录成功，正在跳转...');
+            ElMessage.success('登录成功，正在跳转...');
             loadUserData(token); // 获取用户数据
             setTimeout(() => {
-                router.push('/doctor'); // 跳转到目标页面
-            }, 2000); // 2秒延迟
+                router.push('/doctor');
+            }, 1200);
         } else {
-            showAlertBox2('请检查你的账号或密码是否正确');
+            ElMessage.error(response.data.message || '请检查你的账号或密码是否正确');
         }
     } catch (error) {
         console.error(error);
-        showAlertBox2('登录失败，请检查你的网络连接');
+        ElMessage.error('登录失败，请检查你的网络连接');
     } finally {
         loading.value = false; // 结束加载
     }
@@ -126,65 +117,42 @@ const loadUserData = async (token) => {  // renamed function
 
 <template>
   <div class="auth-page">
-    <header class="auth-topbar">
-      <RouterLink to="/" class="auth-logo">
-        <img src="../assets/t.png" alt="SkinCare AI" />
-        <span>SkinCare AI</span>
-      </RouterLink>
-      <RouterLink to="/enrolll" class="auth-top-link">还没有账号？立即注册</RouterLink>
-    </header>
+    <AppNavbar />
 
-    <main class="auth-main">
-      <!-- 左侧品牌区：先建立“AI 医疗顾问”的信任感，再让用户登录 -->
-      <section class="auth-brand-panel">
-        <span class="ai-eyebrow"><span class="ai-pulse"></span> AI 皮肤健康顾问</span>
-        <h1>让每一次皮肤困扰<br><em>都被认真看见</em></h1>
-        <p class="auth-lead">
-          上传患处照片或描述症状，AI 会结合皮肤科知识库给出初步分析与护理建议。
-          结果仅作健康参考，帮助你更从容地决定下一步。
-        </p>
-
-        <ul class="auth-points">
-          <li>
-            <span class="point-icon"><ion-icon name="scan-outline"></ion-icon></span>
-            <span><strong>图像 + 文字双通道分析</strong>支持患处照片、症状描述与追问</span>
-          </li>
-          <li>
-            <span class="point-icon"><ion-icon name="library-outline"></ion-icon></span>
-            <span><strong>皮肤科知识库检索</strong>15 类常见皮肤病，回答有依据</span>
-          </li>
-          <li>
-            <span class="point-icon"><ion-icon name="shield-checkmark-outline"></ion-icon></span>
-            <span><strong>隐私优先</strong>账号隔离，图片仅用于本次分析</span>
-          </li>
-        </ul>
-
-        <div class="auth-stat-row">
-          <div class="auth-stat"><strong>15 类</strong><span>常见皮肤病覆盖</span></div>
-          <div class="auth-stat"><strong>秒级</strong><span>图像初步分析</span></div>
-          <div class="auth-stat"><strong>7×24</strong><span>随时可问</span></div>
-        </div>
-      </section>
-
-      <!-- 右侧登录卡片：原有 v-model、handleLogin、loading 全部保持不变 -->
+    <main class="auth-main auth-main--single">
+      <!-- 登录卡片：简化为单栏居中，去掉左侧品牌区与卡片头图标 -->
       <section class="auth-card form-box login">
         <div class="auth-card-head">
-          <span class="auth-icon"><ion-icon name="medkit-outline"></ion-icon></span>
           <h2>欢迎回来</h2>
           <p>登录后继续你的皮肤健康档案</p>
         </div>
 
         <form @submit.prevent="handleLogin">
           <div class="input-box">
-            <span class="icon"><ion-icon name="person-outline"></ion-icon></span>
-            <input type="text" v-model="account" required autocomplete="username" />
             <label>账号</label>
+            <div class="input-field">
+              <input type="text" v-model="account" required autocomplete="username" />
+            </div>
           </div>
 
           <div class="input-box">
-            <span class="icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
-            <input type="password" v-model="password" required autocomplete="current-password" />
             <label>密码</label>
+            <div class="input-field">
+              <input
+                :type="showPassword ? 'text' : 'password'"
+                v-model="password"
+                required
+                autocomplete="current-password"
+              />
+              <button
+                type="button"
+                class="eye-toggle"
+                :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                @click="showPassword = !showPassword"
+              >
+                <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+              </button>
+            </div>
           </div>
 
           <p v-if="formError" class="error">{{ formError }}</p>
@@ -193,44 +161,20 @@ const loadUserData = async (token) => {  // renamed function
             {{ loading ? '登录中...' : '登录' }}
           </button>
 
-          <div class="remember-forgot">
+          <div class="auth-links">
             <RouterLink to="/Forgot password">忘记密码？</RouterLink>
-          </div>
-
-          <div class="login-register">
-            <p>还没有账号？<RouterLink to="/enrolll">免费注册</RouterLink></p>
+            <RouterLink to="/enrolll">注册</RouterLink>
           </div>
         </form>
 
         <p class="auth-legal">登录即代表你同意服务条款与隐私政策。AI 建议不替代线下医生诊断。</p>
       </section>
     </main>
-
-    <div v-if="showAlert" class="alert-box ai-toast">{{ alertMessage }}</div>
   </div>
 </template>
 
 <style scoped>
 .auth-page {
   min-height: 100vh;
-}
-
-.auth-topbar {
-  padding-top: 22px;
-  padding-bottom: 10px;
-}
-
-.auth-brand-panel h1 {
-  margin-top: 20px;
-}
-
-.auth-card-head h2 {
-  letter-spacing: -0.03em;
-}
-
-@media (max-width: 960px) {
-  .auth-brand-panel h1 {
-    margin-top: 16px;
-  }
 }
 </style>

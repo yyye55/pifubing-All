@@ -2,6 +2,8 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import axios from 'axios';
+import { ElMessage } from 'element-plus';
+import AppNavbar from '../components/AppNavbar.vue';
 
 // 定义响应式数据
 const account = ref('');
@@ -11,24 +13,14 @@ const email = ref('');
 const verificationCode = ref('');
 const sendingCode = ref(false);
 const passwordError = ref('');
-const formError = ref('');
-const alertMessage = ref('');
-const showAlert = ref(false);
+const showPassword = ref(false); // 新密码可见性切换
+const showConfirmPassword = ref(false); // 确认密码可见性切换
 const router = useRouter();
-
-// 显示弹框的函数
-const showAlertBox2 = (message) => {
-  alertMessage.value = message;
-  showAlert.value = true;
-  setTimeout(() => {
-    showAlert.value = false; // 3秒后自动隐藏弹框
-  }, 3000);
-};
 
 // 发送验证码
 const handleSendVerificationCode = async () => {
   if (!email.value) {
-    showAlertBox2('请输入有效的邮箱地址');
+    ElMessage.error('请输入有效的邮箱地址');
     return;
   }
   sendingCode.value = true;
@@ -39,13 +31,13 @@ const handleSendVerificationCode = async () => {
     });
 
     if (response.data.code === 200) {
-      showAlertBox2('验证码已发送，请检查您的邮箱');
+      ElMessage.success('验证码已发送，请检查您的邮箱');
     } else {
-      showAlertBox2(response.data.message || '发送验证码失败');
+      ElMessage.error(response.data.message || '发送验证码失败');
     }
   } catch (error) {
     console.error('验证码发送错误:', error);
-    showAlertBox2('发送验证码时出现错误');
+    ElMessage.error('发送验证码时出现错误');
   } finally {
     sendingCode.value = false;
   }
@@ -62,33 +54,29 @@ const validatePasswords = () => {
 
 // 表单提交
 const handleSubmit = async () => {
-  // 清空错误提示
-  formError.value = '';
-
   // 验证表单数据完整性
   if (!account.value) {
-    showAlertBox2('请输入账号');
+    ElMessage.error('请输入账号');
     return;
   }
   if (!email.value) {
-    showAlertBox2('请输入邮箱地址');
+    ElMessage.error('请输入邮箱地址');
     return;
   }
   if (!verificationCode.value) {
-    showAlertBox2('请输入验证码');
+    ElMessage.error('请输入验证码');
     return;
   }
   if (!password.value || !confirmPassword.value) {
-    showAlertBox2('请填写密码和确认密码');
+    ElMessage.error('请填写密码和确认密码');
     return;
   }
   if (passwordError.value) {
-    showAlertBox2(passwordError.value);
+    ElMessage.error(passwordError.value);
     return;
   }
 
   try {
-    // 提交表单
     const response = await axios.post(`/users/forget/password`, {
       account: account.value,
       password: password.value,
@@ -97,143 +85,115 @@ const handleSubmit = async () => {
     });
 
     if (response.data.code === 200) {
-      showAlertBox2('密码重置成功！');
+      ElMessage.success('密码重置成功，正在跳转登录...');
       setTimeout(() => {
-        router.push('/'); // 跳转到登录页面
-      }, 2000); // 2秒延迟
+        router.push('/HomeView');
+      }, 1200);
     } else {
-      showAlertBox2(response.data.message || '提交失败，请稍后重试');
+      ElMessage.error(response.data.message || '提交失败，请稍后重试');
     }
   } catch (error) {
     console.error('提交请求错误:', error);
-    showAlertBox2('网络错误，请稍后重试');
+    ElMessage.error('网络错误，请稍后重试');
   }
 };
 </script>
 
 <template>
-  <header style="position: fixed;">
-    <div>
-      <img src="../assets/t.png" alt="logo" class="logo1" />
-    </div>
-    <nav class="navigation2">
-      <RouterLink to="/HomeView">
-        <span class="icon-tu">
-          <ion-icon name="arrow-back-outline"></ion-icon>
-        </span>
-      </RouterLink>
-    </nav>
-  </header>
+  <div class="auth-page">
+    <AppNavbar />
 
-  <div class="box1">
-    <div class="wrapper2">
-      <span class="icon-close"></span>
-      <div class="form-box login">
-        <h2>忘记密码</h2>
+    <main class="auth-main auth-main--single auth-main--forgot">
+      <!-- 忘记密码卡片：紧凑间距，矮屏时可整页上下滚动 -->
+      <section class="auth-card form-box login">
+        <div class="auth-card-head">
+          <h2>重置密码</h2>
+          <p>验证邮箱后即可设置新密码</p>
+        </div>
+
         <form @submit.prevent="handleSubmit">
-          <div class="input-box">
-            <span class="icon"><ion-icon name="person-outline"></ion-icon></span>
-            <input type="text" v-model="account" required />
-            <label>账号</label>
+          <div class="auth-grid">
+            <div class="input-box">
+              <label>账号</label>
+              <div class="input-field">
+                <input type="text" v-model="account" required />
+              </div>
+            </div>
+            <div class="input-box">
+              <label>新密码</label>
+              <div class="input-field">
+                <input
+                  :type="showPassword ? 'text' : 'password'"
+                  v-model="password"
+                  @input="validatePasswords"
+                  required
+                />
+                <button
+                  type="button"
+                  class="eye-toggle"
+                  :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                  @click="showPassword = !showPassword"
+                >
+                  <ion-icon :name="showPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+                </button>
+              </div>
+            </div>
+            <div class="input-box">
+              <label>确认新密码</label>
+              <div class="input-field">
+                <input
+                  :type="showConfirmPassword ? 'text' : 'password'"
+                  v-model="confirmPassword"
+                  @input="validatePasswords"
+                  required
+                />
+                <button
+                  type="button"
+                  class="eye-toggle"
+                  :aria-label="showConfirmPassword ? '隐藏密码' : '显示密码'"
+                  @click="showConfirmPassword = !showConfirmPassword"
+                >
+                  <ion-icon :name="showConfirmPassword ? 'eye-off-outline' : 'eye-outline'"></ion-icon>
+                </button>
+              </div>
+            </div>
+            <div class="input-box">
+              <label>邮箱</label>
+              <div class="input-field">
+                <input type="email" v-model="email" required />
+                <button
+                  type="button"
+                  class="btn-verify"
+                  :disabled="sendingCode"
+                  @click="handleSendVerificationCode"
+                >
+                  {{ sendingCode ? '发送中...' : '发送验证码' }}
+                </button>
+              </div>
+            </div>
+            <div class="input-box">
+              <label>验证码</label>
+              <div class="input-field">
+                <input type="text" v-model="verificationCode" required />
+              </div>
+            </div>
           </div>
-          <div class="input-box">
-            <span class="icon"><ion-icon name="lock-closed-outline"></ion-icon></span>
-            <input
-              type="password"
-              v-model="password"
-              @input="validatePasswords"
-              required
-            />
-            <label>密码</label>
+
+          <p v-if="passwordError" class="error">{{ passwordError }}</p>
+
+          <button type="submit" class="btn">确认重置</button>
+
+          <div class="auth-links">
+            <RouterLink to="/HomeView">返回登录</RouterLink>
+            <RouterLink to="/enrolll">注册</RouterLink>
           </div>
-          <div class="input-box">
-            <span class="icon"><ion-icon name="lock-open-outline"></ion-icon></span>
-            <input
-              type="password"
-              v-model="confirmPassword"
-              @input="validatePasswords"
-              required
-            />
-            <label>确认密码</label>
-          </div>
-          <div class="input-box">
-            <span class="icon"><ion-icon name="mail-outline"></ion-icon></span>
-            <input type="email" v-model="email" required />
-            <label>邮箱</label>
-            <button
-              type="button"
-              class="btn-verify"
-              :disabled="sendingCode"
-              @click="handleSendVerificationCode"
-            >
-              {{ sendingCode ? '发送中...' : '发送验证码' }}
-            </button>
-          </div>
-          <div class="input-box">
-            <span class="icon"><ion-icon name="shield-checkmark-outline"></ion-icon></span>
-            <input type="text" v-model="verificationCode" required />
-            <label>请输入验证码</label>
-          </div>
-          <RouterLink to="/HomeView">
-          <button type="submit" class="btn">确认</button>
-         </RouterLink>
         </form>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
-
-  <!-- 全局弹框 -->
-  <div v-if="showAlert" class="alert-box">
-    <p>{{ alertMessage }}</p>
-  </div>
-
-  <bottom>
-    <nav class="navigation">
-      <p class="zi"></p>
-    </nav>
-  </bottom>
 </template>
 
 <style scoped>
-header{
-  width: 100%;
-  padding: 20px 100px;
-z-index:998;
-/* background: linear-gradient(90deg, #4da8b7 40% ,#55ceb2e4); */
-background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  max-height: 10vh;
-  height: 10vh;
-}
-
-bottom{
-  position: fixed;
-  bottom:0;
-  width: 100%;
-  padding: 20px 100px;
-/* background-color:rgba(92, 90, 90, 0.7); */
-/* background-color: #b0b4b4; */
-/* background: linear-gradient(90deg, #4da8b7 40% ,#55ceb2e4); */
-background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  z-index: 99;
-  max-height: 4vw;
-}
-
-.alert-box {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #fff;
-  color: #0e0b0b;
-  padding: 15px 20px;
-  border-radius: 5px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-}
+/* 重置密码页使用统一 auth 组件样式（auth-card / auth-grid / input-box / btn-verify / auth-links），
+   主题定义见 theme.css */
 </style>

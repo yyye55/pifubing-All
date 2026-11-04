@@ -1,7 +1,7 @@
 <template>
   <header class="app-navbar" :class="{ 'app-navbar--large': props.large }">
-    <RouterLink to="/" class="app-brand" aria-label="SkinCare AI 首页">
-      <img src="../assets/t.png" alt="AI 皮肤医疗顾问" class="logo1" />
+    <RouterLink to="/Picture" class="app-brand" aria-label="AI 皮肤医疗顾问">
+      <img src="../assets/t.png" alt="" class="logo1" />
     </RouterLink>
 
     <nav class="navigations app-nav-links" aria-label="主导航">
@@ -27,13 +27,24 @@
         </span>
         <span>{{ item.label }}</span>
       </RouterLink>
+      <button
+        v-if="token"
+        type="button"
+        class="nav-link nav-logout"
+        title="退出登录"
+        aria-label="退出登录"
+        @click="handleLogout"
+      >
+        <ion-icon name="log-out-outline"></ion-icon>
+        <span>退出</span>
+      </button>
     </nav>
   </header>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 const props = defineProps({
   // 关怀模式使用更大的字号和点击区域，但导航项内容保持一致
@@ -44,19 +55,27 @@ const props = defineProps({
 });
 
 const route = useRoute();
+const router = useRouter();
 const token = ref(localStorage.getItem('token') || '');
 const avatarUrl = ref(localStorage.getItem('avatarUrl') || '');
 const avatarFailed = ref(false);
 
 const NAV_ITEMS = [
-  { id: 'home', label: '首页', path: '/Picture', requiresAuth: true },
-  { id: 'cases', label: '常见病例', path: '/doctor' },
+  { id: 'home', label: '首页', path: '/Picture' },
+  { id: 'cases', label: '常见病例', path: '/doctor', requiresAuth: true },
   { id: 'about', label: '关于我们', path: '/AboutUs' },
-  { id: 'ai', label: '询问 AI', path: '/home', requiresAuth: true, cta: true },
+  { id: 'login', label: '登录/注册', path: '/HomeView', guestOnly: true },
+  { id: 'ai', label: 'AI问诊', path: '/home', requiresAuth: true, cta: true },
   { id: 'profile', label: '个人中心', path: '/Summarize', requiresAuth: true }
 ];
 
-const navItems = computed(() => NAV_ITEMS);
+// 未登录：首页、关于我们、登录/注册；已登录：完整导航
+const navItems = computed(() => {
+  if (!token.value) {
+    return NAV_ITEMS.filter(item => !item.requiresAuth);
+  }
+  return NAV_ITEMS.filter(item => !item.guestOnly);
+});
 
 function refreshAuthState() {
   token.value = localStorage.getItem('token') || '';
@@ -74,6 +93,19 @@ function resolveTo(item) {
 
 function isActive(item) {
   return route.path === item.path;
+}
+
+function handleLogout() {
+  // 退出登录：清除 token 和相关用户状态，跳回登录页
+  localStorage.removeItem('token');
+  localStorage.removeItem('user_id');
+  localStorage.removeItem('avatarUrl');
+  localStorage.removeItem('newChatId');
+  localStorage.removeItem('chat_id');
+  token.value = '';
+  avatarUrl.value = '';
+  avatarFailed.value = false;
+  router.push('/HomeView');
 }
 
 onMounted(refreshAuthState);
@@ -184,6 +216,25 @@ watch(() => route.fullPath, refreshAuthState);
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* 退出按钮：与其他 nav-link 同形，颜色稍淡以区分入口 */
+.nav-link.nav-logout {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: rgba(245, 253, 251, 0.78);
+  margin-left: 4px;
+}
+
+.nav-link.nav-logout:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.nav-link.nav-logout ion-icon {
+  font-size: 15px;
 }
 
 /* 关怀模式：只放大字号和点击区域，不改变导航内容 */

@@ -1,9 +1,11 @@
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+import json
 import shutil
 from pathlib import Path
 import zipfile
 import os
+import re
 import logging
 import uvicorn
 from dotenv import load_dotenv
@@ -117,35 +119,42 @@ def retrieve_information(search_engine, question, k=1):
         return ""
 
 
+def build_llm_messages(system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
+    """把检索结果和图片预测结果组合成提示词，供普通调用和流式调用共用。"""
+    prediction_info = f"图片预测结果为 {predicted_class}，置信度为 {confidence:.2%}。"
+
+    # 根据权重调整信息组合
+    combined_info = []
+    if weight < 1.0:
+        name_length = int(len(name_info) * weight) if name_info else 0
+        desc_length = int(len(desc_info) * (1 - weight)) if desc_info else 0
+
+        combined_info.append("（加权综合检索结果）")
+        if name_info:
+            combined_info.append(f"名称检索信息（权重{weight:.0%}）：\n{name_info[:name_length]}")
+        if desc_info:
+            combined_info.append(f"描述检索信息（权重{(1 - weight):.0%}）：\n{desc_info[:desc_length]}")
+    else:
+        if name_info:
+            combined_info.append(f"名称检索信息：\n{name_info}")
+        if desc_info:
+            combined_info.append(f"描述检索信息：\n{desc_info}")
+
+    combined_system_info = f"{system_message.content}\n{prediction_info}\n" + "\n".join(combined_info)
+    combined_system_message = SystemMessage(content=combined_system_info)
+
+    return [
+        combined_system_message,
+        HumanMessage(content=question)
+    ]
+
+
 def call_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
-    """把检索结果和图片预测结果组合成提示词，调用大模型生成诊断建议。"""
+    """非流式调用：收集完整回复后返回，保持原有 /process_text 行为。"""
     try:
-        prediction_info = f"图片预测结果为 {predicted_class}，置信度为 {confidence:.2%}。"
-
-        # 根据权重调整信息组合
-        combined_info = []
-        if weight < 1.0:
-            name_length = int(len(name_info) * weight) if name_info else 0
-            desc_length = int(len(desc_info) * (1 - weight)) if desc_info else 0
-
-            combined_info.append("（加权综合检索结果）")
-            if name_info:
-                combined_info.append(f"名称检索信息（权重{weight:.0%}）：\n{name_info[:name_length]}")
-            if desc_info:
-                combined_info.append(f"描述检索信息（权重{(1 - weight):.0%}）：\n{desc_info[:desc_length]}")
-        else:
-            if name_info:
-                combined_info.append(f"名称检索信息：\n{name_info}")
-            if desc_info:
-                combined_info.append(f"描述检索信息：\n{desc_info}")
-
-        combined_system_info = f"{system_message.content}\n{prediction_info}\n" + "\n".join(combined_info)
-        combined_system_message = SystemMessage(content=combined_system_info)
-
-        messages = [
-            combined_system_message,
-            HumanMessage(content=question)
-        ]
+        messages = build_llm_messages(
+            system_message, name_info, desc_info, question, predicted_class, confidence, weight
+        )
 
         full_response = ""
         for chunk in chat.stream(messages):
@@ -155,6 +164,164 @@ def call_llm(chat, system_message, name_info, desc_info, question, predicted_cla
     except Exception as e:
         logging.error(f"大模型调用失败: {e}")
         return None
+
+
+def stream_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
+    """流式调用：逐块产出 ("thoughts", 推理内容) 或 ("message", 回答内容)。"""
+    messages = build_llm_messages(
+        system_message, name_info, desc_info, question, predicted_class, confidence, weight
+    )
+
+    for chunk in chat.stream(messages):
+        # DeepSeek-R1 等推理模型可能把思考过程放在 reasoning_content 中
+        extra = getattr(chunk, "additional_kwargs", None) or {}
+        reasoning = extra.get("reasoning_content") or ""
+        if reasoning:
+            yield "thoughts", reasoning
+
+        if chunk.content:
+            yield "message", chunk.content
+
+
+FOLLOWUP_SYSTEM_PROMPT = (
+    "你是一名皮肤科问诊助手。请根据用户的问题和医生的回答，"
+    "生成最多3个用户接下来最可能继续追问的问题。\n"
+    "要求：\n"
+    "1. 每个问题不超过20个汉字，口语化；\n"
+    "2. 必须与当前问答直接相关，不要编造诊断、药物剂量或治疗承诺；\n"
+    "3. 只输出 JSON 数组，例如 [\"问题1\", \"问题2\"]，"
+    "不要输出解释、编号或代码块。"
+)
+
+
+def generate_followups(question, answer):
+    """根据本轮问答生成最多3个追问；任何失败都返回空列表，不影响主回答。"""
+    if not question or not answer or not answer.strip():
+        return []
+
+    try:
+        chat = ChatOpenAI(
+            api_key=CONFIG["api_key"],
+            base_url=CONFIG["base_url"],
+            model=CONFIG["model_name"],
+            streaming=False,
+            max_tokens=200,
+            timeout=12,
+        )
+        messages = [
+            SystemMessage(content=FOLLOWUP_SYSTEM_PROMPT),
+            HumanMessage(content=f"用户问题：{question}\n医生回答：{answer[:2000]}"),
+        ]
+        response = chat.invoke(messages)
+        raw = response.content if isinstance(response.content, str) else str(response.content)
+        raw = raw.strip()
+
+        # 兼容模型偶尔返回 ```json 代码块或前后带解释文字的情况。
+        match = re.search(r"\[[\s\S]*\]", raw)
+        items = []
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    items = parsed
+            except json.JSONDecodeError:
+                items = []
+        if not items:
+            items = [line.strip(" -•*\t") for line in raw.splitlines() if line.strip()]
+
+        suggestions = []
+        for item in items:
+            if not isinstance(item, str):
+                continue
+            text = re.sub(r"^[\d\s\.\、\)\-]+", "", item).strip(" \"'“”")
+            if not text or len(text) > 40 or text in suggestions:
+                continue
+            suggestions.append(text)
+            if len(suggestions) == 3:
+                break
+        return suggestions
+    except Exception as e:
+        logging.warning(f"生成追问失败: {e}")
+        return []
+
+
+HOT_QUESTIONS_SYSTEM_PROMPT = (
+    "你是一名皮肤科问诊平台的助手。请生成若干近期用户最常咨询、最热门的皮肤科问题。\n"
+    "要求：\n"
+    "1. 覆盖不同的常见皮肤困扰（如痤疮、湿疹、荨麻疹、脚气、脱发、晒伤等），不要重复；\n"
+    "2. 每个问题包含 label（4-8个汉字的短标题）和 text（20-45个汉字、口语化的完整问题）；\n"
+    "3. 不要包含诊断结论、药物剂量或治疗承诺；\n"
+    "4. 只输出 JSON 数组，例如 "
+    "[{\"label\":\"痘痘反复\",\"text\":\"脸上痘痘总是反反复复，平时应该怎么护理？\"}]，"
+    "不要输出解释、编号或代码块。"
+)
+
+
+def generate_hot_questions(max_items=4):
+    """让大模型生成首页展示的热门皮肤科问题。
+
+    任何失败都返回空列表，由前端回退到内置问题，不影响首页正常使用。
+    """
+    if max_items <= 0:
+        return []
+
+    try:
+        chat = ChatOpenAI(
+            api_key=CONFIG["api_key"],
+            base_url=CONFIG["base_url"],
+            model=CONFIG["model_name"],
+            streaming=False,
+            # 一次生成一整池问题，token 和时间都要比单个追问留得更多。
+            max_tokens=1200,
+            timeout=40,
+        )
+        messages = [
+            SystemMessage(content=HOT_QUESTIONS_SYSTEM_PROMPT),
+            HumanMessage(content=f"请生成 {max_items} 个热门皮肤科问题。"),
+        ]
+        response = chat.invoke(messages)
+        raw = response.content if isinstance(response.content, str) else str(response.content)
+        raw = raw.strip()
+
+        # 兼容模型偶尔返回 ```json 代码块或前后带解释文字的情况。
+        match = re.search(r"\[[\s\S]*\]", raw)
+        items = []
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, list):
+                    items = parsed
+            except json.JSONDecodeError:
+                items = []
+
+        questions = []
+        seen = set()
+        for item in items:
+            if isinstance(item, str):
+                label, text = "", item.strip()
+            elif isinstance(item, dict):
+                label = str(item.get("label", "")).strip()
+                text = str(item.get("text", "")).strip()
+            else:
+                continue
+
+            label = re.sub(r"^[\d\s\.\、\)\-\#\*]+", "", label).strip(" \"'“”")
+            text = re.sub(r"^[\d\s\.\、\)\-\#\*]+", "", text).strip(" \"'“”")
+            # 完整问题为空、过长或重复的条目直接丢弃，避免前端渲染出无效按钮。
+            if not text or len(text) > 60 or text in seen:
+                continue
+            if not label or len(label) > 12:
+                # 模型没给短标题时，用问题开头兜底，保证按钮上有可读文字。
+                label = text[:8]
+            seen.add(text)
+            questions.append({"label": label, "text": text})
+            if len(questions) == max_items:
+                break
+
+        return questions
+    except Exception as e:
+        logging.warning(f"生成热门问题失败: {e}")
+        return []
 
 
 def handle_file_upload(image: UploadFile):
@@ -340,6 +507,126 @@ async def generate_response(
     except Exception as e:
         logging.error(f"生成接口错误: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+def sse_payload(payload):
+    """把字典编码成一行 SSE data，确保 JSON 内的换行不会破坏事件边界。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/process_text_stream")
+async def generate_response_stream(
+        conversation: str = Form(...),
+        predicted_class: str = Form(""),
+        confidence: float = Form(0.0)
+):
+    """文字问诊流式接口：先做知识库检索，再把大模型回答逐块推给 Go 后端。
+
+    返回格式为 SSE：
+      data: {"content": "..."}
+      data: {"thoughts": "..."}
+      data: [DONE]
+    Go 后端会把这些事件再转发给浏览器。
+    """
+    try:
+        # 根据置信度计算权重；纯文字问诊通常没有图片置信度，默认 weight=1.0
+        weight = 1.0
+        if 70 <= confidence < 85:
+            weight = 0.3
+        elif 85 <= confidence <= 100:
+            weight = 0.5
+
+        search_engine, search = initialize_retrieval()
+        name_info = retrieve_information(search_engine, predicted_class)
+        desc_info = retrieve_information(search, conversation, k=2)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+
+        # 没配置 Key 时也要用 SSE 返回，避免前端一直停在“思考中”
+        if not CONFIG["api_key"]:
+            logging.warning("未配置 LLM_API_KEY，流式接口返回提示文本")
+
+            def fallback_stream():
+                yield sse_payload({"content": "当前未配置大模型服务，暂时无法生成回答。"})
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                fallback_stream(),
+                media_type="text/event-stream",
+                headers=headers
+            )
+
+        chat = ChatOpenAI(
+            api_key=CONFIG["api_key"],
+            base_url=CONFIG["base_url"],
+            model=CONFIG["model_name"],
+            streaming=True
+        )
+        system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
+
+        def event_stream():
+            answer_parts = []
+            try:
+                for kind, text in stream_llm(
+                    chat=chat,
+                    system_message=system_message,
+                    name_info=name_info,
+                    desc_info=desc_info,
+                    question=conversation,
+                    predicted_class=predicted_class,
+                    confidence=confidence,
+                    weight=weight
+                ):
+                    if kind == "thoughts":
+                        yield sse_payload({"thoughts": text})
+                    else:
+                        answer_parts.append(text)
+                        yield sse_payload({"content": text})
+
+                # 回答完整输出后，再生成最多3个相关追问，供前端做成可点击的快捷问题。
+                suggestions = generate_followups(conversation, "".join(answer_parts))
+                if suggestions:
+                    yield sse_payload({"suggestions": suggestions})
+            except Exception as e:
+                logging.error(f"流式大模型调用失败: {e}")
+                yield sse_payload({"error": "大模型调用失败，请稍后再试。"})
+            # 正常结束或发生异常时补一个结束标记；客户端主动断开（GeneratorExit）
+            # 时不应再向已关闭的连接写数据，所以不能放在 finally 里。
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers=headers
+        )
+    except Exception as e:
+        logging.error(f"流式生成接口错误: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/generate_followups")
+async def generate_followups_endpoint(
+        question: str = Form(...),
+        answer: str = Form(...)
+):
+    """供图片问答等非 Python 主流程复用：根据问答内容生成最多3个追问。"""
+    return {"suggestions": generate_followups(question, answer)}
+
+
+@app.get("/generate_hot_questions")
+def generate_hot_questions_endpoint(count: int = 4):
+    """供 Go 后端获取首页热门皮肤科问题。
+
+    失败时返回空数组，前端会继续使用内置的兜底问题。
+    这里用普通 def 而不是 async def，让 FastAPI 把阻塞的模型调用放到线程池执行。
+    """
+    # 后端一次会请求一整池（默认 8 个），上限放宽到 20。
+    count = max(1, min(count, 20))
+    return {"questions": generate_hot_questions(count)}
 
 
 if __name__ == "__main__":

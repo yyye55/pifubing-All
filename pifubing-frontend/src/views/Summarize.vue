@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import axios from 'axios';
-import { ElAvatar, ElRow, ElCol, ElCard, ElForm, ElFormItem, ElInput, ElButton,ElDialog } from 'element-plus';
+import { ElAvatar, ElRow, ElCol, ElCard, ElForm, ElFormItem, ElInput, ElButton, ElDialog, ElMessage } from 'element-plus';
 
 import { useRouter } from 'vue-router';
 import AppNavbar from '../components/AppNavbar.vue';
@@ -9,6 +9,7 @@ import AppNavbar from '../components/AppNavbar.vue';
 
 // 获取 token
 const token = localStorage.getItem('token');
+const router = useRouter();
 // 上传头像后保存到 LocalStorage
 
 
@@ -16,9 +17,6 @@ const token = localStorage.getItem('token');
 const avatarUrl = ref('');
 const backgroundImage = ref('');
 //const backgroundImage = ref(require('../assets/images'));  // 使用 require 来加载本地图片
-
-const alertMessage = ref('');  // 提示框内容
-const showAlert = ref(false);  // 控制提示框显示与否
 
 // 表单数据
 const formData = ref({
@@ -156,17 +154,15 @@ const submitForm = async () => {
     console.log('提交的数据：', formDataToSubmit);
 
     if (response.data.code === 200) {
-     // showAlertBox2
-      ('个人信息更新成功');
+      ElMessage.success('个人信息更新成功');
       // 更新成功后重新加载用户信息
-      loadUserData();  // calling the renamed function
+      loadUserData();
     } else {
-      //showAlertBox2
-      ('更新失败：' + response.data.message);
+      ElMessage.error('更新失败：' + response.data.message);
     }
   } catch (error) {
     console.error('提交失败', error);
-    showAlertBox2('提交失败');
+    ElMessage.error('提交失败');
   }
 };
 
@@ -188,48 +184,31 @@ const submitDiseaseInfo = async () => {
     console.log('病史和过敏史更新成功', response.data);
 
     if (response.data.code === 200) {
-      showAlertBox2('病史和过敏史更新成功');
+      ElMessage.success('病史和过敏史更新成功');
       // 更新成功后重新加载用户信息
-      loadUserData();  // calling the renamed function
+      loadUserData();
     } else {
-      showAlertBox2('更新失败：' + response.data.message);
+      ElMessage.error('更新失败：' + response.data.message);
     }
   } catch (error) {
     console.error('提交病史和过敏史失败', error);
-    showAlertBox2('提交失败，请稍后再试');
+    ElMessage.error('提交失败，请稍后再试');
   }
 };
-
-// showAlertBox2 代码
-const showAlertBox2 = (message) => {
-  alertMessage.value = message;
-  showAlert.value = true;
-  setTimeout(() => {
-    showAlert.value = false; // 3秒后自动隐藏弹框
-  }, 3000);
-};
-
-
 
 // 处理头像上传
 const handleAvatarChange = async (event) => {
   const file = event.target.files[0]; // 获取用户选择的文件
 
   if (file) {
-    // const newAvatarUrl = URL.createObjectURL(file); // 创建临时URL
-    // avatarUrl.value = newAvatarUrl;  // 更新头像 URL
-
-    // 保存头像 URL 到 localStorage
-    // localStorage.setItem('avatarUrl', newAvatarUrl);
-
     // 如果需要进行上传至服务器的操作，可以如下发送请求
     const formData = new FormData();
     formData.append('avatar', file);  // 将文件添加到表单数据中
 
     try {
       if (!token) {
-        useRouter().push('/');  // 如果没有 token，跳转到登录页面
-        console.error('未登录，请先登录');
+        ElMessage.warning('请先登录后再上传头像');
+        router.push('/HomeView');
         return;
       }
 
@@ -248,15 +227,15 @@ const handleAvatarChange = async (event) => {
         // 更新头像 URL
         avatarUrl.value = response.data.data; // 使用服务器返回的 URL
         localStorage.setItem('avatarUrl', response.data.data); // 更新 localStorage 中的头像 URL
-        showAlertBox2('头像上传成功！');
-        console.log('头像更新成功',response.data.data);
+        ElMessage.success('头像上传成功！');
+        console.log('头像更新成功', response.data.data);
       } else {
         console.error('头像更新失败:', response.data.message);
-        showAlertBox2('头像更新失败：' + response.data.message);
+        ElMessage.error('头像更新失败：' + response.data.message);
       }
     } catch (error) {
       console.error('请求失败', error);
-      showAlertBox2('上传失败，请稍后再试');
+      ElMessage.error('上传失败，请稍后再试');
     }
   }
 };
@@ -326,7 +305,6 @@ onMounted(() => {
     <!-- 左侧：个人健康历史 -->
     <div class="lishi">
       <div class="history-image-container">
-    <img src="../assets/yy.png" alt="健康历史图标" class="history-icon" />
     <div class="history-text">
       你一定不知道的皮肤小知识</div>
     <div class="text">点击进入 &nbsp;&nbsp;&nbsp;  →</div>
@@ -444,24 +422,9 @@ onMounted(() => {
     </div>
   </div>
 </div>
-    <!-- 底部导航 -->
-    <footer class="footer">
-      <nav class="navigation">
-        <p><RouterLink to="/Picture">首页</RouterLink></p><br>
-        <p><RouterLink to="/doctor">常见病例</RouterLink></p><br>
-        <p><RouterLink to="/AboutUs">关于我们</RouterLink></p><br>
-      </nav>
-      <div class="slogan">
-        “AI让健康预见未来，而我们的使命，是让每一寸肌肤都被精准守护”
-      </div>
-      <div class="qrcode">
-        <img src="../assets/二维码/二维码.png" alt="二维码1" />
-        <img src="../assets/二维码/二维码.png" alt="二维码2" />
-      </div>
-    </footer>
     <footer class="footer">
       <div class="copyright">
-        <p>SkinCare AI · AI 建议仅供参考，如有不适请及时就医</p>
+        <p>AI 皮肤医疗顾问 · AI 建议仅供参考，如有不适请及时就医</p>
       </div>
     </footer>
   </div>
@@ -745,19 +708,6 @@ header {
   width: 20vw;
 }
 
-.alert-box {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #30b8d094;
-  color: #fff;
-  padding: 15px 20px;
-  border-radius: 5px;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-}
-
 .profile-container {
   width: 100%;
   background-image: url('../assets/个人.jpg');
@@ -946,10 +896,7 @@ header {
 .profile-container {
   min-height: 100vh;
   padding-bottom: 30px;
-  background:
-    radial-gradient(circle at 92% 4%, rgba(23, 184, 166, 0.1), transparent 30%),
-    var(--ai-mint-2) !important;
-  background-image: none !important;
+  background: var(--ai-mint-2);
 }
 
 .box {

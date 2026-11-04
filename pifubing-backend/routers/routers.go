@@ -38,6 +38,8 @@ func SetupRouter() *gin.Engine {
 	r.GET("/predict/text", controller.PredictText)
 	//仅文字问诊（不上传图片）
 	r.GET("/predict/only/text", controller.PredictOnlyText)
+	//仅文字问诊的流式版本，响应为 text/event-stream
+	r.GET("/predict/only/text/stream", controller.PredictOnlyTextStream)
 	// 创建学生相关的路由组
 	studentsGroup := r.Group("/users")
 	studentsGroup.Use(middlewares.Authenticate) // 为学生相关路由组添加公共的中间件
@@ -75,6 +77,9 @@ func SetupRouter() *gin.Engine {
 	// 删除聊天框接口
 	studentsGroup.DELETE("/Delete_chat", controller.Delete_chat)
 
+	// 清理当前用户的空对话（没有任何消息的聊天框）
+	studentsGroup.DELETE("/Delete_empty_chats", controller.Delete_empty_chats)
+
 	// 文字描述预测接口/聊天框中历史记录
 	studentsGroup.POST("/Create_image_ask_messages", controller.Create_image_ask_messages)
 
@@ -83,6 +88,9 @@ func SetupRouter() *gin.Engine {
 
 	//上传图片检索
 	studentsGroup.POST("/predict/image", controller.PredictImage)
+
+	//首页空状态的 AI 热门皮肤科问题
+	studentsGroup.GET("/hot_questions", controller.GetHotQuestions)
 
 	return r
 }
