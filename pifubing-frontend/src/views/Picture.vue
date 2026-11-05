@@ -1,71 +1,113 @@
 <script setup>
-import { ref, onMounted } from 'vue';
-import axios from 'axios';
-import { useRouter } from 'vue-router';
+import { ref, onMounted, onUnmounted } from 'vue';
 import AppNavbar from '../components/AppNavbar.vue';
 
-// 图鉴使用统一风格的自绘医学示意图，后续可直接替换为真实临床照片
-import eczemaIllustration from '../assets/gallery/eczema.svg';
-import urticariaIllustration from '../assets/gallery/urticaria.svg';
-import tineaIllustration from '../assets/gallery/tinea.svg';
+import eczemaImage from '../assets/cases/eczema.png';
+import psoriasisImage from '../assets/cases/psoriasis.png';
+import atopicDermatitisImage from '../assets/cases/atopic-dermatitis.png';
+import exanthemImage from '../assets/cases/exanthem.png';
+import roseaImage from '../assets/cases/rosea.png';
+import tineaImage from '../assets/cases/tinea.png';
+import telangiectasiaImage from '../assets/图片2.png';
+import urticariaImage from '../assets/图片1.png';
 
-const galleryItems = [
+const caseItems = [
   {
     id: 'eczema',
-    image: eczemaIllustration,
-    title: '湿疹样皮炎',
-    tag: '红斑、干燥、脱屑',
-    description: '常见于面颊、肘窝或腘窝，边界多不清晰，常伴明显瘙痒。'
+    image: eczemaImage,
+    title: '湿疹',
+    description: '皮肤屏障受损引起的炎症反应，容易反复发作，抓挠后会加重。',
+    symptoms: '红斑、密集小丘疹、抓破后渗液结痂，夜间瘙痒明显。',
+    relief: '以保湿修复为主，避免搔抓和热水烫洗，急性期按医嘱短期使用弱效激素药膏。',
+    question: '我想了解湿疹：皮肤出现红斑、密集丘疹，很痒还反复发作，日常该怎么护理和缓解？'
   },
   {
-    id: 'urticaria',
-    image: urticariaIllustration,
-    title: '荨麻疹',
-    tag: '风团、瘙痒、时起时消',
-    description: '典型表现为隆起的风团，中央偏白、周围红晕，单个皮损多在 24 小时内消退。'
+    id: 'psoriasis',
+    image: psoriasisImage,
+    title: '银屑病',
+    description: '边界清楚的红色斑块，表面覆盖银白色鳞屑，常见于肘膝伸侧和头皮。',
+    symptoms: '红色斑块、厚层银白色鳞屑，刮除鳞屑后可见点状出血，冬季易加重。',
+    relief: '先软化鳞屑并坚持保湿，避免抠抓、熬夜和饮酒；外用激素或卡泊三醇需遵医嘱，范围大时及时就医。',
+    question: '我想了解银屑病：身上有边界清楚的红斑和银白色鳞屑，反复发作，该怎么缓解和护理？'
+  },
+  {
+    id: 'atopic-dermatitis',
+    image: atopicDermatitisImage,
+    title: '特应性皮炎',
+    description: '慢性反复的过敏性皮肤病，皮肤干燥、瘙痒明显，常累及肘窝、腘窝等屈侧部位。',
+    symptoms: '皮肤干燥粗糙、剧烈瘙痒，屈侧分布，长期搔抓后皮肤增厚呈苔藓样变。',
+    relief: '每天足量涂抹润肤剂，温水短时沐浴并避免搓澡，远离羊毛衣物和已知过敏原，发作期按医嘱用药。',
+    question: '我想了解特应性皮炎：皮肤很干、特别痒，肘窝腘窝反复发作，日常该怎么护理和缓解？'
+  },
+  {
+    id: 'exanthem',
+    image: exanthemImage,
+    title: '发疹',
+    description: '局部出现的成簇小水疱，常在免疫力下降、劳累或受凉后出现。',
+    symptoms: '红斑基础上成簇透明小水疱，伴灼热、刺痛或瘙痒，可反复出现在同一部位。',
+    relief: '保持局部清洁干燥、不要挤压水疱，尽早就医评估是否需要抗病毒治疗，越早处理效果越好。',
+    question: '我想了解发疹：局部长了成簇的小水疱，有灼热刺痛感，需要怎么处理，要不要尽快就医？'
+  },
+  {
+    id: 'rosea',
+    image: roseaImage,
+    title: '玫瑰糠疹',
+    description: '常见于躯干和四肢近端，多表现为椭圆形红斑，表面有细碎鳞屑。',
+    symptoms: '先出现较大的母斑，随后成批出现椭圆形红斑，边缘有领圈状鳞屑，轻度瘙痒。',
+    relief: '多数可自行消退，期间注意保湿止痒、避免热水烫洗和剧烈运动出汗，持续不缓解再就医。',
+    question: '我想了解玫瑰糠疹：躯干出现椭圆形红斑，边缘有细碎鳞屑，有点痒，该怎么处理？'
   },
   {
     id: 'tinea',
-    image: tineaIllustration,
+    image: tineaImage,
     title: '体癣',
-    tag: '环形红斑、边缘脱屑',
-    description: '真菌感染常见环形红斑，边缘活跃脱屑，中央可相对消退，需规范抗真菌治疗。'
+    description: '真菌感染引起，常见环状红斑、边缘隆起，中心区域可逐渐消退。',
+    symptoms: '环形红斑、边缘活跃脱屑并隆起，中央相对自愈，伴明显瘙痒。',
+    relief: '保持患处干燥透气、毛巾衣物单独清洗，需要规范抗真菌治疗，不要自行涂激素药膏。',
+    question: '我想了解体癣：皮肤出现环形红斑、边缘脱屑，很痒，该怎么治疗和预防复发？'
+  },
+  {
+    id: 'telangiectasia',
+    image: telangiectasiaImage,
+    title: '毛细血管扩张',
+    description: '面部或鼻翼出现可见红血丝，常与皮肤屏障受损、日晒或敏感相关。',
+    symptoms: '面颊、鼻翼可见细小红血丝，遇热、情绪激动或日晒后潮红加重，伴紧绷感。',
+    relief: '坚持防晒、温和清洁，避免频繁去角质和冷热刺激，明显影响外观时可咨询激光治疗。',
+    question: '我想了解毛细血管扩张：面部出现红血丝，遇热更明显，平时该怎么护理和改善？'
+  },
+  {
+    id: 'urticaria',
+    image: urticariaImage,
+    title: '荨麻疹',
+    description: '突然出现的风团样皮疹，常伴明显瘙痒，可能与过敏、感染或环境因素有关。',
+    symptoms: '隆起风团、中央偏白周围红晕，单个皮损多在 24 小时内消退，可在身体各处反复出现。',
+    relief: '记录并避开可疑诱因，按医嘱口服抗组胺药；若出现呼吸困难、眼睑肿胀需立即就医。',
+    question: '我想了解荨麻疹：身上反复起风团，很痒，一会消一会起，该怎么缓解和排查诱因？'
   }
 ];
 
-// 定义数据结构
-const imageData = ref([]);
+// 点击图片放大查看，与问诊跳转互不影响
+const previewItem = ref(null);
 
-const router = useRouter();
-const token = localStorage.getItem('token');
+function openPreview(item) {
+  previewItem.value = item;
+  document.body.style.overflow = 'hidden';
+}
 
-// 从后端获取数据的方法（未登录时跳过，不影响首页展示）
-const fetchData = async () => {
-  const token = localStorage.getItem('token');
-  if (!token) return;
+function closePreview() {
+  previewItem.value = null;
+  document.body.style.overflow = '';
+}
 
-  try {
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'multipart/form-data'
-    };
+function handleKeydown(event) {
+  if (event.key === 'Escape') closePreview();
+}
 
-    const response = await axios.get('/users/Check/Images_Description', { headers });
-    console.log('请求数据成功', response.data);
+onMounted(() => window.addEventListener('keydown', handleKeydown));
 
-    if (response.data.code === 200) {
-      imageData.value = response.data.data;
-    } else {
-      console.error('数据加载失败:', response.data);
-    }
-  } catch (error) {
-    console.error('请求失败:', error);
-  }
-};
-
-// 在组件挂载时调用 fetchData
-onMounted(() => {
-  fetchData();
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown);
+  document.body.style.overflow = '';
 });
 </script>
 
@@ -74,14 +116,14 @@ onMounted(() => {
     <AppNavbar />
 
     <main class="dashboard-main">
-      <!-- 首屏：一句话告诉用户“现在可以做什么”，避免旧版大图轮播喧宾夺主 -->
+      <!-- 首屏：保持问候式开头，右侧给出服务概览 -->
       <section class="dashboard-hero">
         <div class="dashboard-hero-copy">
           <span class="ai-eyebrow"><span class="ai-pulse"></span> 今日皮肤健康助手</span>
           <h1>你好，今天想了解<br><em>哪方面的皮肤问题？</em></h1>
           <p>
-            上传一张清晰的患处照片，或直接描述瘙痒、红斑、脱屑等症状。
-            AI 会先给出初步判断，再陪你一步步梳理护理与就医建议。
+            先从下方常见病例里找一找相似的皮肤表现，也可以直接上传患处照片或描述症状，
+            AI 会给出初步判断与护理方向。
           </p>
           <div class="dashboard-actions">
             <RouterLink to="/home" class="ai-primary-btn">
@@ -116,64 +158,74 @@ onMounted(() => {
         </aside>
       </section>
 
-      <!-- 主内容：皮肤图鉴（登录后首页只保留工具性内容，"问诊前准备"已移到平台介绍页） -->
-      <section class="dashboard-grid">
-        <div class="dashboard-card carousel-card">
-          <div class="section-head">
-            <div>
-              <h2 class="ai-section-title">皮肤健康图鉴</h2>
-              <p class="ai-section-sub">常见皮肤表现速览，帮助你更准确地描述症状</p>
-            </div>
-          </div>
-
-          <el-carousel
-            indicator-position="outside"
-            :height="'clamp(240px, 30vw, 360px)'"
-            class="gallery-carousel"
-          >
-            <el-carousel-item v-for="item in galleryItems" :key="item.id">
-              <figure class="gallery-slide">
-                <img
-                  :src="item.image"
-                  :alt="`${item.title}医学示意图`"
-                  class="carousel-image"
-                />
-                <figcaption class="gallery-caption">
-                  <div class="gallery-caption-row">
-                    <h3>{{ item.title }}</h3>
-                  </div>
-                  <p>{{ item.tag }}，{{ item.description }}</p>
-                </figcaption>
-              </figure>
-            </el-carousel-item>
-          </el-carousel>
-          <p class="gallery-note">图示为医学示意图，仅用于健康科普，不作为诊断依据。</p>
-        </div>
-      </section>
-
-      <!-- 典型皮肤病参考：数据仍来自 /users/Check/Images_Description -->
-      <section class="disease-library">
+      <!-- 主内容：常见病例，点击卡片把该病的提问带入 AI 问诊输入框 -->
+      <section class="cases-section">
         <div class="section-head">
           <div>
-            <h2 class="ai-section-title">典型皮肤病参考</h2>
-            <p class="ai-section-sub">以下内容由后台知识库提供，仅作健康科普</p>
+            <h2 class="ai-section-title">常见病例</h2>
+            <p class="ai-section-sub">点击图片可放大查看，点击「咨询 AI」会把该病的提问带入问诊输入框</p>
           </div>
         </div>
 
-        <div v-if="imageData.length" class="disease-grid">
-          <article v-for="item in imageData" :key="item.id" class="disease-card">
-            <img :src="item.image_url" :alt="item.description" />
-            <div class="disease-card-body">
-              <p>{{ item.description }}</p>
-              <RouterLink to="/home">咨询 AI <ion-icon name="arrow-forward-outline"></ion-icon></RouterLink>
+        <div class="cases-grid">
+          <article v-for="item in caseItems" :key="item.id" class="case-card">
+            <!-- 图片单独作为按钮：只负责放大预览，不触发问诊跳转 -->
+            <button
+              type="button"
+              class="case-image"
+              :aria-label="'放大查看' + item.title"
+              @click="openPreview(item)"
+            >
+              <img :src="item.image" :alt="item.title" />
+              <span class="case-zoom-hint">
+                <ion-icon name="expand-outline"></ion-icon>
+              </span>
+            </button>
+
+            <div class="case-body">
+              <div class="case-head">
+                <h3>{{ item.title }}</h3>
+                <RouterLink
+                  :to="{ path: '/home', query: { ask: item.question } }"
+                  class="case-link"
+                >
+                  咨询 AI
+                  <ion-icon name="arrow-forward-outline"></ion-icon>
+                </RouterLink>
+              </div>
+              <p class="case-desc">{{ item.description }}</p>
+
+              <div class="case-detail">
+                <div class="case-row">
+                  <span class="case-label">常见表现</span>
+                  <p>{{ item.symptoms }}</p>
+                </div>
+                <div class="case-row">
+                  <span class="case-label">如何缓解</span>
+                  <p>{{ item.relief }}</p>
+                </div>
+              </div>
             </div>
           </article>
         </div>
-        <div v-else class="disease-empty">
-          知识库内容加载中，或当前暂无可展示的参考条目。
-        </div>
       </section>
     </main>
+
+    <!-- 图片放大预览层：点击遮罩或关闭按钮退出，Esc 也可关闭 -->
+    <Teleport to="body">
+      <div v-if="previewItem" class="preview-mask" @click.self="closePreview">
+        <div class="preview-panel">
+          <button type="button" class="preview-close" aria-label="关闭预览" @click="closePreview">
+            <ion-icon name="close-outline"></ion-icon>
+          </button>
+          <img :src="previewItem.image" :alt="previewItem.title" />
+          <div class="preview-caption">
+            <h3>{{ previewItem.title }}</h3>
+            <p>{{ previewItem.description }}</p>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <footer class="dashboard-footer">
       <span>AI 建议仅供参考，如有不适请及时就医并遵医嘱</span>
@@ -281,24 +333,6 @@ onMounted(() => {
   color: var(--ai-amber);
 }
 
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 20px;
-  margin-top: 28px;
-}
-
-.dashboard-card {
-  border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius);
-  background: #fff;
-  box-shadow: var(--ai-shadow-sm);
-}
-
-.carousel-card {
-  padding: 24px;
-}
-
 .section-head {
   display: flex;
   align-items: flex-start;
@@ -307,165 +341,252 @@ onMounted(() => {
   margin-bottom: 18px;
 }
 
-.gallery-slide {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  overflow: hidden;
-  border-radius: 16px;
-  background: var(--ai-mint);
+.cases-section {
+  margin-top: clamp(32px, 4.5vw, 54px);
 }
 
-.carousel-image {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  border-radius: 16px;
-}
-
-.gallery-caption {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  padding: 46px 20px 18px;
-  background: linear-gradient(180deg, transparent, rgba(8, 36, 43, 0.78));
-  color: #fff;
-  pointer-events: none;
-}
-
-.gallery-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.14);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.gallery-caption-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 8px 0 5px;
-}
-
-.gallery-caption h3 {
-  margin: 0;
-  color: #fff;
-  font-size: 22px;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-}
-
-.gallery-disclaimer {
-  padding: 2px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 99px;
-  color: rgba(255, 255, 255, 0.86);
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.gallery-caption p {
-  max-width: 580px;
-  margin: 0;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.gallery-note {
-  margin: 8px 0 0;
-  color: var(--ai-muted);
-  font-size: 11px;
-  text-align: right;
-}
-
-.carousel-card :deep(.el-carousel__indicators--outside) {
-  margin-top: 14px;
-}
-
-.carousel-card :deep(.el-carousel__button) {
-  width: 22px;
-  height: 4px;
-  border-radius: 99px;
-  background: var(--ai-line-strong);
-}
-
-.carousel-card :deep(.el-carousel__indicator.is-active .el-carousel__button) {
-  background: var(--ai-primary);
-}
-
-.disease-library {
-  margin-top: 34px;
-}
-
-.disease-grid {
+/* 两列横向小卡片：左侧缩略图、右侧病名 + 表现/缓解，一屏能看更多病例 */
+.cases-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.disease-card {
+.case-card {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--ai-line);
-  border-radius: 18px;
+  border-radius: 14px;
   background: #fff;
-  box-shadow: var(--ai-shadow-sm);
-  transition: transform 0.22s ease, box-shadow 0.22s ease;
+  box-shadow: 0 2px 6px rgba(16, 42, 55, 0.04);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
 }
 
-.disease-card:hover {
+.case-card:hover {
   transform: translateY(-4px);
-  box-shadow: var(--ai-shadow);
+  border-color: rgba(15, 111, 122, 0.32);
+  box-shadow: 0 14px 28px rgba(16, 42, 55, 0.12);
 }
 
-.disease-card img {
-  width: 100%;
-  height: 190px;
-  object-fit: cover;
+/* 图片层：整体是按钮，悬停时轻微放大并显示放大图标 */
+.case-image {
+  position: relative;
   display: block;
-}
-
-.disease-card-body {
-  padding: 16px;
-}
-
-.disease-card-body p {
-  display: -webkit-box;
-  margin: 0 0 12px;
   overflow: hidden;
-  color: var(--ai-ink-soft);
-  font-size: 13px;
-  line-height: 1.65;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--ai-mint);
+  cursor: zoom-in;
 }
 
-.disease-card-body a {
+.case-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease, filter 0.4s ease;
+}
+
+.case-card:hover .case-image img {
+  transform: scale(1.09);
+  filter: saturate(1.08);
+}
+
+.case-zoom-hint {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--ai-primary);
-  font-size: 12px;
-  font-weight: 650;
-  text-decoration: none;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(16, 42, 55, 0.6);
+  color: #fff;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.24s ease;
 }
 
-.disease-empty {
-  padding: 34px;
-  border: 1px dashed var(--ai-line-strong);
-  border-radius: var(--ai-radius);
+.case-card:hover .case-zoom-hint {
+  opacity: 1;
+}
+
+.case-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+/* 病名与「咨询 AI」同一行，按钮固定在卡片右上角 */
+.case-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.case-head h3 {
+  margin: 0;
+  color: var(--ai-ink);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.case-desc {
+  margin: 0;
+  color: var(--ai-ink-soft);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* 表现与缓解放进浅色块，扫读时能快速区分“这是什么”和“该怎么办” */
+.case-detail {
+  display: grid;
+  gap: 7px;
+  margin-top: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f6fbfa;
+}
+
+.case-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.case-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.case-row p {
+  margin: 0;
   color: var(--ai-muted);
-  text-align: center;
-  font-size: 13px;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+/* 右上角的咨询入口：小胶囊按钮，只有它会把病例提问带进问诊 */
+.case-link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 9px;
+  border: 1px solid var(--ai-line);
+  border-radius: 999px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 11.5px;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.22s ease, border-color 0.22s ease, color 0.22s ease;
+}
+
+.case-link:hover {
+  border-color: var(--ai-primary);
+  background: var(--ai-primary);
+  color: #fff;
+}
+
+.case-link ion-icon {
+  font-size: 12px;
+  transition: transform 0.22s ease;
+}
+
+.case-link:hover ion-icon {
+  transform: translateX(3px);
+}
+
+/* 图片放大预览：深色遮罩 + 居中大图，层级高于导航栏 */
+.preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(9, 26, 32, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+.preview-panel {
+  position: relative;
+  max-width: min(820px, 100%);
+  max-height: 90vh;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.preview-panel img {
+  display: block;
+  width: 100%;
+  max-height: 74vh;
+  object-fit: contain;
+  background: #10242b;
+}
+
+.preview-caption {
+  padding: 13px 18px 15px;
+}
+
+.preview-caption h3 {
+  margin: 0 0 4px;
+  color: var(--ai-ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.preview-caption p {
+  margin: 0;
+  color: var(--ai-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.preview-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(16, 42, 55, 0.68);
+  color: #fff;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.preview-close:hover {
+  background: rgba(16, 42, 55, 0.9);
 }
 
 .dashboard-footer {
@@ -482,13 +603,12 @@ onMounted(() => {
 }
 
 @media (max-width: 980px) {
-  .dashboard-hero,
-  .dashboard-grid {
+  .dashboard-hero {
     grid-template-columns: 1fr;
   }
 
-  .disease-grid {
-    grid-template-columns: repeat(2, 1fr);
+  .cases-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -507,44 +627,21 @@ onMounted(() => {
     width: 100%;
   }
 
-  .dashboard-grid {
-    margin-top: 20px;
-  }
-
-  .carousel-card {
-    padding: 18px;
-  }
-
-  /* 移动端轮播高度仅 240px，收紧说明层，避免遮住大半张示意图 */
-  .gallery-caption {
-    padding: 26px 14px 14px;
-  }
-
-  .gallery-tag {
-    padding: 3px 8px;
-    font-size: 10px;
-  }
-
-  .gallery-caption h3 {
-    font-size: 18px;
-  }
-
-  .gallery-caption p {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: 11px;
-    line-height: 1.5;
-    line-clamp: 2;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-
-  .gallery-note {
-    text-align: left;
-  }
-
-  .disease-grid {
+  /* 手机端改为上下结构，图片放在最上方，避免被压成窄条 */
+  .case-card {
     grid-template-columns: 1fr;
+  }
+
+  .case-image {
+    height: 150px;
+  }
+
+  .case-body {
+    padding: 13px 15px;
+  }
+
+  .preview-mask {
+    padding: 14px;
   }
 
   .dashboard-footer {

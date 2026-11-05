@@ -3,8 +3,8 @@ import { ElMessage } from 'element-plus';
 import Homene from '../views/Homene.vue';
 import Picture from '../views/Picture.vue';
 
-// 需要登录才能访问的路由路径（白名单）
-const REQUIRES_AUTH_PATHS = ['/home', '/Summarize', '/doctor'];
+// 需要登录才能访问的路由路径（与各路由的 meta.requiresAuth 保持一致，作为双保险）
+const REQUIRES_AUTH_PATHS = ['/home', '/Summarize', '/Picture', '/care'];
 
 const router = createRouter({
   history: createWebHashHistory(import.meta.env.BASE_URL),
@@ -42,11 +42,12 @@ const router = createRouter({
       name: '忘记密码',
       component: () => import('../views/Forgot password.vue'),
     },
-    //图片廊（首页）
+    //图片廊（登录后的首页）
     {
       path: '/Picture',
       name: '图片廊',
       component: Picture,
+      meta: { requiresAuth: true },
     },
 
     {
@@ -59,19 +60,25 @@ const router = createRouter({
       path: '/care',
       name: '关怀模式',
       component: () => import('../views/care.vue'),
+      meta: { requiresAuth: true },
     },
 
+    // 常见病例已合并进登录后首页，旧地址统一重定向过去
     {
       path: '/doctor',
-      name: '病例',
-      component: () => import('../views/doctor.vue'),
-      meta: { requiresAuth: true },
+      redirect: '/Picture',
     },
 
     {
       path: '/AboutUs',
       name: '关于我们',
       component: () => import('../views/AboutUs.vue'),
+    },
+
+    // 兜底：未匹配的地址一律回到未登录的平台介绍页，避免出现空白页
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
     },
   ],
 });

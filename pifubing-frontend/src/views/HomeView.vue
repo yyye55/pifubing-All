@@ -43,8 +43,12 @@ const handleLogin = async () => {
             console.log('user_id 存储成功:', user_id);
             ElMessage.success('登录成功，正在跳转...');
             loadUserData(token); // 获取用户数据
+            // 若因未登录被拦截过，登录后回到原来想访问的页面，否则进入登录后首页
+            const redirectPath = router.currentRoute.value.query.redirect;
+            const target =
+                typeof redirectPath === 'string' && redirectPath.startsWith('/') ? redirectPath : '/Picture';
             setTimeout(() => {
-                router.push('/Picture'); // 登录成功后进入图鉴首页
+                router.push(target);
             }, 1200);
         } else {
             ElMessage.error(response.data.message || '请检查你的账号或密码是否正确');

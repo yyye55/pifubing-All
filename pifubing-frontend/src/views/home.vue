@@ -62,6 +62,8 @@ export default {
   mounted() {
     // 首页快捷提问优先使用 AI 生成的热门问题，失败时保留 data 里的兜底问题。
     this.loadHotQuestions();
+    // 从首页病例卡跳转过来时，把对应提问填入输入框
+    this.fillQuestionFromQuery();
   },
 
   computed: {
@@ -728,6 +730,26 @@ export default {
         // 热门问题不是问诊主流程，失败时不弹提示打扰用户
         console.warn('获取 AI 热门问题失败，继续使用默认问题:', error);
       }
+    },
+
+    // 从病例卡跳转过来时，把该病的提问填入输入框，由用户确认后再发送
+    fillQuestionFromQuery() {
+      const ask = this.$route?.query?.ask;
+      if (!ask) return;
+      const text = Array.isArray(ask) ? ask[0] : String(ask);
+
+      this.userMessage = text;
+      this.$nextTick(() => {
+        const box =
+          this.$refs.editableContent || document.querySelector('.textarea-wen');
+        if (box) {
+          box.innerText = text;
+          box.focus();
+        }
+      });
+
+      // 清掉地址栏参数，避免刷新页面时重复填充
+      this.$router.replace('/home');
     },
 
     // 点击快捷提问：把问题写入输入框后直接发送，省去手动输入

@@ -60,7 +60,6 @@ const avatarFailed = ref(false);
 const NAV_ITEMS = [
   // 未登录：这一项显示「平台介绍」并指向 /；登录后：显示「首页」并指向皮肤图鉴首页
   { id: 'home', label: '首页', guestLabel: '平台介绍', path: '/Picture', guestPath: '/' },
-  { id: 'cases', label: '常见病例', path: '/doctor', requiresAuth: true },
   { id: 'about', label: '关于我们', path: '/AboutUs', loggedOutOnly: true },
   { id: 'login', label: '登录/注册', path: '/HomeView', guestOnly: true },
   { id: 'ai', label: 'AI问诊', path: '/home', requiresAuth: true, cta: true },
