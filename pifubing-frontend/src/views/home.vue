@@ -736,7 +736,8 @@ export default {
       } else if (response.data?.code === 202) {
         // 图片质量门槛未通过：明确告诉用户哪里有问题，并给出可执行的拍摄建议。
         await ElMessageBox.alert(
-          `${response.data?.error || '图片质量不足，请重新拍摄。'}\n\n` +
+          `请上传与皮肤病相关的照片（皮肤、毛发、指甲等患处），不要上传无关图片。\n\n` +
+            `${response.data?.error || '图片质量不足，请重新拍摄。'}\n\n` +
             `拍摄建议：\n` +
             `1 让患处占画面 40%~60%，不要离得太远；\n` +
             `2 在自然光下拍摄，关闭闪光灯和美颜；\n` +
@@ -766,8 +767,18 @@ export default {
 
         eventSource.addEventListener('message', (event) => {
           if (!event.data) return;
+          // Go 端下发的是 {"content":"..."}，EventSource 的 data 是整段 JSON，
+          // 必须取出 content，否则界面会把每个 JSON 对象原样拼进回答。
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch {
+            payload = null;
+          }
+          const content = typeof payload?.content === 'string' ? payload.content : event.data;
+          if (!content) return;
           aiMessage.thinking = false;
-          aiMessage.response += event.data;
+          aiMessage.response += content;
           if (this.isCurrentChat(entry.chatId)) {
             this.syncChatStreamStatus();
             this.scrollThreadToBottom();
@@ -776,7 +787,15 @@ export default {
 
         eventSource.addEventListener('thoughts', (event) => {
           if (!event.data) return;
-          aiMessage.thoughts += event.data;
+          // 深度思考同样是 {"thoughts":"..."} 的 JSON 包裹。
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch {
+            payload = null;
+          }
+          const thoughts = payload?.thoughts || payload?.content || event.data;
+          aiMessage.thoughts += thoughts;
           if (this.isCurrentChat(entry.chatId)) this.scrollThreadToBottom();
         });
 
@@ -1141,6 +1160,9 @@ export default {
         eventSource: null,
         cancelled: false,
         cleanupTimer: null,
+        // 刷新后靠轮询后端登记表接回回答进度；正常发送的流不需要轮询。
+        pollTimer: null,
+        pollFailures: 0,
       });
       backgroundStreams.set(key, entry);
       return entry;
@@ -1150,6 +1172,10 @@ export default {
     finishBackgroundStream(entry, status) {
       if (!entry || entry.status !== 'streaming') return;
       entry.status = status;
+      if (entry.pollTimer) {
+        clearTimeout(entry.pollTimer);
+        entry.pollTimer = null;
+      }
       if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
       entry.cleanupTimer = setTimeout(() => {
         if (backgroundStreams.get(entry.chatId) === entry) {
@@ -1167,6 +1193,7 @@ export default {
       entry.cancelled = true;
       if (entry.controller) entry.controller.abort();
       if (entry.eventSource) entry.eventSource.close();
+      if (entry.pollTimer) clearTimeout(entry.pollTimer);
       if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
       backgroundStreams.delete(key);
       if (this.isCurrentChat(key)) this.syncChatStreamStatus();
@@ -1181,6 +1208,199 @@ export default {
       this.isThinking = Boolean(
         active && !entry.aiMessage.response && !entry.aiMessage.error
       );
+    },
+
+    // 判断历史消息里是否已经存在这条完整回答。
+    // 用于刷新后恢复时去重：数据库异步写入可能比登记表状态更晚完成。
+    hasAnswerInMessages(text) {
+      const answer = (text || '').trim();
+      if (!answer) return false;
+      return this.messages.some(
+        (message) =>
+          message.sender === 'system' && (message.response || '').trim() === answer
+      );
+    },
+
+    // 刷新页面后从后端登记表恢复正在生成/刚生成完的回答。
+    // 刷新会清空 backgroundStreams，但 Go 端仍在继续接收大模型输出并暂存进度；
+    // 这里把快照重新渲染成气泡，生成中的再继续轮询直到结束。
+    async resumeLiveStream(chatId) {
+      const key = Number(chatId);
+      // 同一次页面生命周期内切换对话时，内存里的后台流仍然存在，无需恢复。
+      if (!key || backgroundStreams.has(key)) return;
+
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      let data;
+      try {
+        const response = await axios.get('/predict/stream/status', {
+          params: { chat_id: key },
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.data?.code !== 200) return;
+        data = response.data?.data || {};
+      } catch (error) {
+        // 恢复进度只是辅助能力，接口失败时保留数据库里的历史即可。
+        console.warn('恢复后台回答失败:', error);
+        return;
+      }
+
+      // 等待期间用户切去了别的对话，或这条对话已经重新开始生成，丢弃过期结果。
+      if (!this.isCurrentChat(key) || backgroundStreams.has(key)) return;
+      // idle 表示后端没有这条对话的进度，历史接口返回的内容已经是完整的。
+      if (!data.status || data.status === 'idle') return;
+
+      const responseText = typeof data.text === 'string' ? data.text : '';
+      // 数据库已经完整保存这条回答时，历史消息里已经有对应气泡，不再重复追加。
+      if (responseText.trim() && this.hasAnswerInMessages(responseText)) return;
+
+      const images = this.parseImageUrls(data.images);
+      const ask = typeof data.ask === 'string' ? data.ask.trim() : '';
+      const isDone = data.status !== 'streaming';
+
+      // done 但没有正文说明没有可展示的回答，保持历史记录原样。
+      if (isDone && !responseText && data.status !== 'error') return;
+
+      this.messages.push({
+        sender: 'user',
+        side: 'right',
+        text:
+          ask ||
+          (images.length > 1
+            ? '请帮我看看这几张图片'
+            : images.length === 1
+              ? '请帮我看看这张图片'
+              : ''),
+        images,
+      });
+      this.messages.push({
+        sender: 'system',
+        side: 'left',
+        thinking: !isDone && !responseText && !data.thoughts,
+        thoughts: typeof data.thoughts === 'string' ? data.thoughts : '',
+        response: responseText,
+        suggestions: this.normalizeSuggestions(data.suggestions),
+        text: '',
+        // 已经生成出正文时按成功展示，和正常流“有内容就不算失败”保持一致。
+        error:
+          data.status === 'error' && !responseText
+            ? '抱歉，AI 服务暂时不可用，请稍后再试。'
+            : '',
+        meta: typeof data.meta === 'string' ? data.meta : '',
+        structure: typeof data.structure === 'string' ? data.structure : '',
+      });
+
+      if (isDone) {
+        this.scrollThreadToBottom();
+        return;
+      }
+
+      // 生成中的回答注册成后台流：发送按钮显示“回答中”，轮询继续补齐内容。
+      const entry = reactive({
+        chatId: key,
+        userMessage: this.messages[this.messages.length - 2],
+        aiMessage: this.messages[this.messages.length - 1],
+        status: 'streaming',
+        controller: null,
+        eventSource: null,
+        cancelled: false,
+        cleanupTimer: null,
+        pollTimer: null,
+        pollFailures: 0,
+      });
+      backgroundStreams.set(key, entry);
+      this.syncChatStreamStatus();
+      this.scrollThreadToBottom();
+      this.startLiveStreamPolling(entry);
+    },
+
+    // 轮询后端登记表，把刷新后仍在生成的内容持续写入当前 AI 气泡。
+    startLiveStreamPolling(entry) {
+      if (!entry || entry.pollTimer) return;
+
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const poll = async () => {
+        entry.pollTimer = null;
+        if (entry.cancelled || entry.status !== 'streaming') return;
+
+        try {
+          const response = await axios.get('/predict/stream/status', {
+            params: { chat_id: entry.chatId },
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          entry.pollFailures = 0;
+          // 请求返回前用户删除了这条对话，直接丢弃结果。
+          if (entry.cancelled || entry.status !== 'streaming') return;
+
+          const data =
+            response.data?.code === 200 ? response.data.data || {} : {};
+          // 登记表已过期（5 分钟）或后端重启：保留已恢复的内容并结束轮询。
+          if (!data.status || data.status === 'idle') {
+            entry.aiMessage.thinking = false;
+            if (!entry.aiMessage.response) {
+              entry.aiMessage.error = 'AI 回复中断，请稍后重试。';
+            }
+            this.finishBackgroundStream(
+              entry,
+              entry.aiMessage.error ? 'error' : 'done'
+            );
+            return;
+          }
+
+          const aiMessage = entry.aiMessage;
+          if (typeof data.text === 'string') aiMessage.response = data.text;
+          if (typeof data.thoughts === 'string') {
+            aiMessage.thoughts = data.thoughts;
+          }
+          aiMessage.suggestions = this.normalizeSuggestions(data.suggestions);
+          if (data.meta) aiMessage.meta = data.meta;
+          if (data.structure) aiMessage.structure = data.structure;
+          // 还没有任何正文或推理过程时保持“思考中”动画。
+          aiMessage.thinking = !aiMessage.response && !aiMessage.thoughts;
+          // 已有正文时即使后端报错也保留回答，不显示容易误导的错误提示。
+          if (data.status === 'error' && !aiMessage.response) {
+            aiMessage.error = '抱歉，AI 服务暂时不可用，请稍后再试。';
+          }
+
+          if (this.isCurrentChat(entry.chatId)) {
+            this.syncChatStreamStatus();
+            this.scrollThreadToBottom();
+          }
+
+          if (data.status !== 'streaming') {
+            aiMessage.thinking = false;
+            this.finishBackgroundStream(
+              entry,
+              data.status === 'error' && !aiMessage.response ? 'error' : 'done'
+            );
+            return;
+          }
+        } catch (error) {
+          // 网络抖动时继续轮询；连续失败说明状态接口不可用，
+          // 保留当前已恢复的内容并退出，避免按钮永远卡在“回答中”。
+          entry.pollFailures += 1;
+          if (entry.pollFailures >= 5) {
+            entry.aiMessage.thinking = false;
+            if (!entry.aiMessage.response) {
+              entry.aiMessage.error = 'AI 回复中断，请稍后重试。';
+            }
+            this.finishBackgroundStream(
+              entry,
+              entry.aiMessage.error ? 'error' : 'done'
+            );
+            return;
+          }
+        }
+
+        if (entry.cancelled || entry.status !== 'streaming') return;
+        entry.pollTimer = setTimeout(poll, 1000);
+      };
+
+      // 稍等一下再查，先把这次刷新后的历史消息渲染出来。
+      entry.pollTimer = setTimeout(poll, 800);
     },
 
     // 判断后台回答是否已经写进数据库，避免切回来时同一条问答显示两遍。
@@ -1326,6 +1546,9 @@ export default {
           this.messages = merged;
           this.syncChatStreamStatus();
           this.scrollThreadToBottom();
+          // 刷新页面后内存登记表已丢失，从后端接回仍在生成的回答。
+          // 正常切换对话时 backgroundStreams 里已有记录，resume 会直接返回。
+          this.resumeLiveStream(chatId);
         } else {
           console.error('获取聊天记录失败:', response.data.message);
           ElMessage.error(response.data.message || '获取聊天记录失败');
@@ -1535,29 +1758,29 @@ export default {
 
           <div class="anniu">
             <form @submit.prevent="handleImageAndChat" class="chat-form">
-              <!-- 已选图片放在输入框上方：每张可单独删除，双击可放大 -->
-              <div v-if="selectedImages.length" class="image-preview">
-                <div
-                  v-for="(item, index) in selectedImages"
-                  :key="item.url"
-                  class="preview-card"
-                  @dblclick="openImageViewer(item.url)"
-                >
-                  <img :src="item.url" alt="已选图片预览" class="preview-thumb" />
-                  <button
-                    type="button"
-                    class="preview-remove"
-                    title="删除图片"
-                    aria-label="删除图片"
-                    @click.stop="removeSelectedImage(index)"
-                    @dblclick.stop
-                  >
-                    <ion-icon name="close-outline"></ion-icon>
-                  </button>
-                </div>
-              </div>
-
               <div class="composer">
+                <!-- 已选图片放在输入框内部最上方，横向排列；文字从下一行开始 -->
+                <div v-if="selectedImages.length" class="image-preview">
+                  <div
+                    v-for="(item, index) in selectedImages"
+                    :key="item.url"
+                    class="preview-card"
+                    @dblclick="openImageViewer(item.url)"
+                  >
+                    <img :src="item.url" alt="已选图片预览" class="preview-thumb" />
+                    <button
+                      type="button"
+                      class="preview-remove"
+                      title="删除图片"
+                      aria-label="删除图片"
+                      @click.stop="removeSelectedImage(index)"
+                      @dblclick.stop
+                    >
+                      <ion-icon name="close-outline"></ion-icon>
+                    </button>
+                  </div>
+                </div>
+
                 <div
                   contenteditable="true"
                   @input="updateUserMessage"
@@ -1587,7 +1810,6 @@ export default {
                     </button>
                     <input type="file" ref="imageInput" style="display: none;" @change="onFileChange" accept="image/*" multiple>
 
-                    <span class="composer-hint">支持图片与文字</span>
                   </div>
 
                   <button type="submit" :disabled="isChatting" class="btn-inside">
@@ -2679,7 +2901,10 @@ input[type="submit"]:hover {
 }
 
 .chat-message.right .chat-image {
-  margin-left: auto !important;
+  /* 用户气泡里的图片由 .chat-images 统一排版：左上角开始、从左往右换行。
+     这里必须清掉 auto，否则 Flex 的左边自适应外边距会吃掉剩余空间，
+     把图片推到右侧，也会覆盖容器的 justify-content: flex-start。 */
+  margin-left: 0 !important;
 }
 
 /* 多图问诊：用户气泡和历史记录中横向展示全部图片 */
@@ -2691,7 +2916,7 @@ input[type="submit"]:hover {
 }
 
 .chat-message.right .chat-images {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .chat-images .chat-image {
@@ -2848,8 +3073,7 @@ input[type="submit"]:hover {
   flex-wrap: wrap;
   gap: 6px;
   width: 100%;
-  padding: 0 10px;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
 }
 
 .preview-card {
@@ -3036,11 +3260,6 @@ input[type="submit"]:hover {
   color: var(--ai-primary);
 }
 
-.composer-hint {
-  margin-left: 5px;
-  color: #9bb0b8;
-  font-size: 11px;
-}
 
 .btn-inside {
   position: static !important;
@@ -3144,8 +3363,5 @@ input[type="submit"]:hover {
     max-width: 88%;
   }
 
-  .composer-hint {
-    display: none;
-  }
 }
 </style>

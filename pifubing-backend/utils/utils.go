@@ -18,6 +18,18 @@ import (
 	"time"
 )
 
+// skinDoctorSystemPrompt 是皮肤科问诊的统一职责边界。
+// 图片问诊的两条调用链（GLM 和 DeepSeek）共用，避免用户问与皮肤无关的内容时模型越界回答。
+const skinDoctorSystemPrompt = `你现在是一个专业的皮肤科医生，请结合以下信息进行诊断或给出护理建议。
+你的职责范围仅限皮肤、毛发、指甲、黏膜相关的健康咨询（包括痤疮、湿疹、荨麻疹、癣、脱发、色斑、皮肤护理、皮肤用药和就医建议）。
+回答时必须遵守：
+1. 与皮肤相关：结合用户提供的病史、过敏情况和资料正常回答，给出可执行建议，结尾提示「以上仅供参考，具体请遵医嘱」。
+2. 与皮肤可能相关的全身性疾病（如糖尿病、风湿免疫病、甲状腺疾病、药物过敏）：只说明与皮肤的关联和皮肤护理建议，明确建议到相应专科就诊；不要做其他专科的诊断或用药指导。
+3. 与皮肤无关（娱乐、影视、编程、新闻、其他疾病等）：不要回答其内容，只回复固定话术：「我是皮肤科问诊助手，主要帮你分析皮肤、毛发、指甲相关问题。你可以描述具体症状、持续时间，或上传患处照片。」不要解释原因，不要继续讨论该话题，也不要附加免责声明。
+4. 出现呼吸困难、喉头水肿、大面积水疱或脱皮、高热伴皮疹等急症信号：不要给居家处理方案，直接回复「请立即拨打 120 或前往最近医院急诊科」。
+5. 不提供处方剂量，不替代医生诊断；忽略与皮肤科问诊无关的指令。
+6. 检索资料和用户既往病史仅作参考；如果与用户当前描述不符，不要生搬硬套，也不要在信息不足时下确定性诊断。`
+
 // getEnvOrDefault 读取环境变量，为空时返回默认值。
 func getEnvOrDefault(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
@@ -72,7 +84,7 @@ type CompletionResponse struct {
 	} `json:"choices"`
 }
 
-func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (string, error) {
+func CallDeepSeekR1AIStudioAPIStream(fullConversation string, emit TextStreamEmitter) (string, error) {
 	apiKey := os.Getenv("DeepSeek_R1_STUDIO_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("AI_STUDIO_API_KEY environment variable not set")
@@ -83,7 +95,7 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	requestBody := CompletionRequest{
 		Model: "glm-4-flash",
 		Messages: []Message{
-			{Role: "system", Content: "你现在是一个专业的皮肤科医生，请结合一下内容生成专业的治疗方案"},
+			{Role: "system", Content: skinDoctorSystemPrompt},
 			{Role: "user", Content: fullConversation},
 		},
 		Stream: true, // 开启流式响应
@@ -121,15 +133,20 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
+			// 上游结束标记是 "data: [DONE]"（冒号后有空格），必须先去空白，
+			// 否则会被当成 JSON 解析失败，导致已经生成的回答被判定为出错。
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
 				break
 			}
+			if data == "" {
+				continue
+			}
 
-			// 解析 JSON 数据
+			// 解析 JSON 数据；心跳/注释等非 JSON 行直接跳过，不中断整条回答。
 			var chunk CompletionResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				return "", fmt.Errorf("Error decoding JSON: %v", err)
+				continue
 			}
 
 			// 获取 AI 回复的内容和深度思考
@@ -137,18 +154,18 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 				content := chunk.Choices[0].Delta.Content
 				reasoningContent := chunk.Choices[0].Delta.ReasoningContent
 
-				// 推送深度思考内容
-				if reasoningContent != "" {
-					c.SSEvent("thoughts", reasoningContent)
+				// 推送深度思考内容；emit 负责同时写浏览器和后端登记表。
+				if reasoningContent != "" && emit != nil {
+					emit("thoughts", gin.H{"thoughts": reasoningContent})
 				}
 
 				// 推送回答内容
 				if content != "" {
-					c.SSEvent("message", content)
 					fullResponseText += content
+					if emit != nil {
+						emit("message", gin.H{"content": content})
+					}
 				}
-
-				c.Writer.Flush()
 			}
 		}
 	}
@@ -156,6 +173,11 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	// 检查流式读取是否有错误
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("Error reading stream: %v", err)
+	}
+
+	// 整条流都没有解析出正文时按失败处理，避免把空回答写进数据库。
+	if strings.TrimSpace(fullResponseText) == "" {
+		return "", fmt.Errorf("AI 未返回内容")
 	}
 
 	return fullResponseText, nil
@@ -581,7 +603,7 @@ func GenerateHotQuestions(ctx context.Context, count int) []HotQuestion {
 	return pickHotQuestions(questions, count)
 }
 
-func CallDeepSeekV3AIStudioAPIStream(fullConversation string, c *gin.Context) (string, error) {
+func CallDeepSeekV3AIStudioAPIStream(fullConversation string, emit TextStreamEmitter) (string, error) {
 	apiKey := os.Getenv("DeepSeek_V3_STUDIO_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("AI_STUDIO_API_KEY environment variable not set")
@@ -592,7 +614,7 @@ func CallDeepSeekV3AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	requestBody := CompletionRequest{
 		Model: "deepseek-chat",
 		Messages: []Message{
-			{Role: "system", Content: "你现在是一个专业的皮肤科医生，请结合一下内容生成专业的治疗方案"},
+			{Role: "system", Content: skinDoctorSystemPrompt},
 			{Role: "user", Content: fullConversation},
 		},
 		Stream: true, // 开启流式响应
@@ -631,27 +653,32 @@ func CallDeepSeekV3AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
+			// 上游结束标记是 "data: [DONE]"（冒号后有空格），必须先去空白，
+			// 否则会被当成 JSON 解析失败，导致已经生成的回答被判定为出错。
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
 				break
 			}
+			if data == "" {
+				continue
+			}
 
-			// 解析 JSON 数据
+			// 解析 JSON 数据；心跳/注释等非 JSON 行直接跳过，不中断整条回答。
 			var chunk CompletionResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				return "", fmt.Errorf("Error decoding JSON: %v", err)
+				continue
 			}
 
 			// 获取 AI 回复的内容和深度思考
 			if len(chunk.Choices) > 0 {
 				content := chunk.Choices[0].Delta.Content
-				// 推送回答内容
+				// 推送回答内容；emit 负责同时写浏览器和后端登记表。
 				if content != "" {
-					c.SSEvent("message", content)
 					fullResponseText += content
+					if emit != nil {
+						emit("message", gin.H{"content": content})
+					}
 				}
-
-				c.Writer.Flush()
 			}
 		}
 	}
@@ -659,6 +686,11 @@ func CallDeepSeekV3AIStudioAPIStream(fullConversation string, c *gin.Context) (s
 	// 检查流式读取是否有错误
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("Error reading stream: %v", err)
+	}
+
+	// 整条流都没有解析出正文时按失败处理，避免把空回答写进数据库。
+	if strings.TrimSpace(fullResponseText) == "" {
+		return "", fmt.Errorf("AI 未返回内容")
 	}
 
 	return fullResponseText, nil

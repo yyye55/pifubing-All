@@ -449,7 +449,7 @@ onBeforeUnmount(() => {
     </main>
 
     <footer class="profile-footer">
-      <p>AI 皮肤医疗顾问 · AI 建议仅供参考，如有不适请及时就医</p>
+      <p>AI 建议仅供参考，如有不适请及时就医并遵医嘱</p>
     </footer>
 
   </div>

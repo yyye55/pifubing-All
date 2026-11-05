@@ -51,11 +51,18 @@ const handleLogin = async () => {
                 router.push(target);
             }, 1200);
         } else {
-            ElMessage.error(response.data.message || '请检查你的账号或密码是否正确');
+            ElMessage.error(response.data.error || response.data.message || '请检查你的账号或密码是否正确');
         }
     } catch (error) {
         console.error(error);
-        ElMessage.error('登录失败，请检查你的网络连接');
+        // 后端校验失败返回 401，axios 会进入 catch；
+        // 优先展示后端给出的账号/密码错误提示，只有无响应时才提示网络问题。
+        const data = error.response?.data;
+        if (data) {
+            ElMessage.error(data.error || data.message || '登录失败，请检查你的账号或密码');
+        } else {
+            ElMessage.error('登录失败，请检查你的网络连接');
+        }
     } finally {
         loading.value = false; // 结束加载
     }

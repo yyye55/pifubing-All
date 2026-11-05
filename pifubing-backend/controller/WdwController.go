@@ -2823,18 +2823,18 @@ func createZipFromFiles(paths []string, zipPath string) error {
 
 // BaseResponse 结构体定义，严格按照图片中的字段
 type AskData struct {
-	Conversation string  `json:"conversation"`
-	Prediction   string  `json:"prediction"`    // 对应图片中的 "prediction"
-	Confidence   float64 `json:"confidence"`    // 对应图片中的 "confidence"
-	ResultSearch string  `json:"result_search"` // 对应图片中的 "result_search"
-	DescSearch   string  `json:"desc_search"`   // 对应图片中的 "desc_search"`
-	Weight       string  `json:"weight"`        // 对应图片中的 "weight"`
+	Conversation     string                `json:"conversation"`
+	Prediction       string                `json:"prediction"`        // 对应图片中的 "prediction"
+	Confidence       float64               `json:"confidence"`        // 对应图片中的 "confidence"
+	ResultSearch     string                `json:"result_search"`     // 对应图片中的 "result_search"
+	DescSearch       string                `json:"desc_search"`       // 对应图片中的 "desc_search"`
+	Weight           string                `json:"weight"`            // 对应图片中的 "weight"`
 	Candidates       []PredictionCandidate `json:"candidates"`        // 图片模型的 top-k 候选，前端原样透传
 	StructureSummary string                `json:"structure_summary"` // 视觉模型提取的形态学结构摘要
 	Url              string                `json:"url"`               //图片地址
-	Chat_id      int     `json:"chat_id"`
-	User_id      int     `json:"user_id"`
-	Model        string  `json:"model"`
+	Chat_id          int                   `json:"chat_id"`
+	User_id          int                   `json:"user_id"`
+	Model            string                `json:"model"`
 }
 
 func PredictText(c *gin.Context) {
@@ -2893,22 +2893,59 @@ func PredictText(c *gin.Context) {
 		input.Conversation,
 	)
 
+	// 图片问诊的预测信息也登记下来，刷新后气泡上方的预测结果和结构描述可以恢复。
+	metaText := fmt.Sprintf("预测结果：%s，置信度：%.2f%%", input.Prediction, input.Confidence)
+	if len(input.Candidates) > 0 {
+		candidateParts := make([]string, 0, 3)
+		for i, candidate := range input.Candidates {
+			if i >= 3 {
+				break
+			}
+			candidateParts = append(candidateParts, fmt.Sprintf("%s %.2f%%", candidate.Prediction, candidate.Confidence))
+		}
+		if len(candidateParts) > 0 {
+			metaText += "；候选：" + strings.Join(candidateParts, "、")
+		}
+	}
+	live := newLiveStream(
+		input.Chat_id,
+		input.User_id,
+		input.Conversation,
+		input.Url,
+		input.Prediction,
+		fmt.Sprintf("%.2f", input.Confidence),
+	)
+	live.setMeta(metaText, strings.TrimSpace(input.StructureSummary))
+
 	// **关键点：使用流式响应**
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
+	// 增量同时写入 live 和浏览器；刷新页面后 emit 仍会更新 live，只是不再写响应。
+	emit := func(event string, payload interface{}) bool {
+		live.apply(event, payload)
+		if c.Request.Context().Err() != nil {
+			return false
+		}
+		c.SSEvent(event, payload)
+		c.Writer.Flush()
+		return true
+	}
+
 	var fullResponseText string
 	if input.Model == "DeepSeek-R1" {
 		// **调用DeepSeek-R1流式 API 并获取完整回复**
-		fullResponseText, err = utils.CallDeepSeekR1AIStudioAPIStream(fullConversation, c)
+		fullResponseText, err = utils.CallDeepSeekR1AIStudioAPIStream(fullConversation, emit)
 		if err != nil {
+			live.finish("error", err.Error(), nil)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 	} else {
 		// **调用DeepSeek-V3流式 API 并获取完整回复**
-		fullResponseText, err = utils.CallDeepSeekV3AIStudioAPIStream(fullConversation, c)
+		fullResponseText, err = utils.CallDeepSeekV3AIStudioAPIStream(fullConversation, emit)
 		if err != nil {
+			live.finish("error", err.Error(), nil)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -2927,7 +2964,14 @@ func PredictText(c *gin.Context) {
 	saveImageMessageAsync(&saveResponse)
 
 	// 回答结束后生成追问，事件流结束前下发给前端渲染成可点击的问题。
-	if suggestions := utils.GenerateFollowups(c.Request.Context(), input.Conversation, fullResponseText); len(suggestions) > 0 {
+	// 用后台上下文：刷新页面会导致请求上下文取消，但追问仍应生成并写进登记表。
+	followupCtx, cancelFollowup := context.WithTimeout(context.Background(), 20*time.Second)
+	suggestions := utils.GenerateFollowups(followupCtx, input.Conversation, fullResponseText)
+	cancelFollowup()
+
+	// 先切到 done 再写 Redis：Redis 失败不影响已经生成的回答在刷新后恢复。
+	live.finish("done", "", suggestions)
+	if len(suggestions) > 0 && c.Request.Context().Err() == nil {
 		c.SSEvent("suggestions", gin.H{"suggestions": suggestions})
 		c.Writer.Flush()
 	}
@@ -3054,6 +3098,10 @@ func PredictOnlyTextStream(c *gin.Context) {
 	fullConversation += "\n我的患病史: " + user.Medical_history
 	fullConversation += "\n过敏情况: " + user.Allergies
 
+	// 开始生成前登记这条回答。浏览器刷新后前端会丢掉内存状态，
+	// 但这里仍会持续接收并保存增量，刷新后的页面可通过状态接口接回来。
+	live := newLiveStream(chatID, userID, conversation, "", "", "")
+
 	// 所有校验通过后再切换成 SSE，避免错误响应变成半截事件流。
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -3069,7 +3117,9 @@ func PredictOnlyTextStream(c *gin.Context) {
 
 	// 客户端断开后 emit 返回 false；CallTextStream 会忽略返回值继续读取上游，
 	// 因此这里只负责“还连着就写”，不再承担“决定是否继续生成”的职责。
+	// 无论浏览器是否还连着，增量都先写进 live，刷新后才能恢复进度。
 	emit := func(event string, payload interface{}) bool {
+		live.apply(event, payload)
 		if c.Request.Context().Err() != nil {
 			return false
 		}
@@ -3081,6 +3131,7 @@ func PredictOnlyTextStream(c *gin.Context) {
 	fullText, streamErr := utils.CallTextStream(streamCtx, fullConversation, emit)
 	if streamErr != nil {
 		log.Printf("文字流式回答失败: %v", streamErr)
+		live.finish("error", "AI 服务暂时不可用，请稍后再试", nil)
 		// 浏览器已经断开时不用再推错误事件，保存逻辑也不执行（没有完整回答）。
 		if c.Request.Context().Err() == nil {
 			c.SSEvent("error", gin.H{"message": "AI 服务暂时不可用，请稍后再试"})
@@ -3090,6 +3141,7 @@ func PredictOnlyTextStream(c *gin.Context) {
 	}
 
 	if strings.TrimSpace(fullText) == "" {
+		live.finish("error", "AI 未返回内容，请稍后再试", nil)
 		if c.Request.Context().Err() == nil {
 			c.SSEvent("error", gin.H{"message": "AI 未返回内容，请稍后再试"})
 			c.Writer.Flush()
@@ -3112,6 +3164,9 @@ func PredictOnlyTextStream(c *gin.Context) {
 	if err := models.Rdb.RPush(ctx, conversationKey, currentMessage).Err(); err == nil {
 		models.Rdb.LTrim(ctx, conversationKey, -2, -1)
 	}
+
+	// 完整回答已生成并提交保存，登记表切到 done，刷新后的页面能拿到完整正文。
+	live.finish("done", "", nil)
 
 	// 明确告诉前端流已经正常结束；浏览器断开时跳过写响应。
 	if c.Request.Context().Err() == nil {

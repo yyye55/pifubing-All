@@ -12,12 +12,6 @@
             上传患处照片，或用文字描述症状。AI 皮肤顾问会结合皮肤科知识库，
             给出初步识别、护理建议与就医提示，让不确定的皮肤问题先有一个清晰方向。
           </p>
-          <div class="hero-actions">
-            <RouterLink to="/HomeView" class="ai-primary-btn">
-              登录后开始 AI 问诊
-              <ion-icon name="arrow-forward-outline"></ion-icon>
-            </RouterLink>
-          </div>
           <div class="hero-trust">
             <span><ion-icon name="shield-checkmark-outline"></ion-icon> 隐私保护</span>
             <span><ion-icon name="library-outline"></ion-icon> 知识库支撑</span>
@@ -66,51 +60,34 @@
         </div>
       </section>
 
-      <section class="landing-features">
+      <section class="landing-features" aria-label="典型使用场景">
         <article class="feature-card">
           <span class="feature-icon"><ion-icon name="images-outline"></ion-icon></span>
-          <h3>图像辅助识别</h3>
-          <p>上传患处照片，AI 图像模型对 15 类常见皮肤病进行初步分类，并给出参考置信度。</p>
+          <h3>皮肤出现说不清的变化</h3>
+          <p>红点、脱屑、瘙痒或色斑，先拍一张清晰患处照片，了解可能方向，减少盲目搜索。</p>
         </article>
         <article class="feature-card">
-          <span class="feature-icon"><ion-icon name="chatbubble-ellipses-outline"></ion-icon></span>
-          <h3>文字图片问诊</h3>
-          <p>支持纯文字或图片问诊，结合皮肤病知识库的概述、症状与治疗方法作答，历史对话可随时回看。</p>
+          <span class="feature-icon"><ion-icon name="refresh-outline"></ion-icon></span>
+          <h3>皮肤问题反复发作</h3>
+          <p>结合皮肤科知识库和你的历史问诊，给出日常护理重点，并提示什么时候该去线下就诊。</p>
         </article>
         <article class="feature-card">
-          <span class="feature-icon"><ion-icon name="document-text-outline"></ion-icon></span>
-          <h3>个人健康档案</h3>
-          <p>病史与过敏史统一保存在个人中心，问诊记录自动归档，复诊时不再重复描述。</p>
+          <span class="feature-icon"><ion-icon name="clipboard-outline"></ion-icon></span>
+          <h3>就医前想先整理症状</h3>
+          <p>把部位、持续时间、诱因和用药情况先理清楚，面诊时表达更完整，沟通更高效。</p>
         </article>
       </section>
 
-      <!-- 问诊前准备：属于使用说明，从登录后首页移到介绍页 -->
-      <section class="landing-prep">
-        <div class="prep-head">
-          <h2 class="ai-section-title">问诊前准备</h2>
-          <p class="ai-section-sub">准备得越充分，AI 的建议越贴合</p>
+      <!-- 转化入口：不重复功能介绍，只给一次明确的行动引导 -->
+      <section class="landing-cta">
+        <div>
+          <h2>皮肤问题，不必先猜</h2>
+          <p>不必带着不确定反复搜索，也不必等到症状加重。现在开始，把皮肤问题先理清楚。</p>
         </div>
-        <ul class="check-list">
-          <li><span>01</span><div><strong>自然光下拍摄</strong><small>避免美颜、滤镜和强反光</small></div></li>
-          <li><span>02</span><div><strong>补充症状描述</strong><small>出现部位、持续时间、是否瘙痒</small></div></li>
-          <li><span>03</span><div><strong>说明用药情况</strong><small>近期是否使用药膏或抗过敏药</small></div></li>
-        </ul>
-      </section>
-
-      <!-- 项目介绍：说明 AI 问诊的定位与能力边界，来自登录后首页的说明区块 -->
-      <section class="landing-about">
-        <div class="about-copy">
-          <h2 class="ai-section-title">AI 皮肤问诊，如何帮助你？</h2>
-          <p>
-            AI 皮肤问诊利用图像识别与皮肤科知识库，辅助你理解皮肤问题的可能方向。
-            它不会替代医生，但可以帮你在就医前整理症状、减少焦虑，并在需要时提醒你及时线下就诊。
-          </p>
-        </div>
-        <div class="about-metrics">
-          <div><strong>图像</strong><span>患处照片初步分类</span></div>
-          <div><strong>知识库</strong><span>名称 / 概述 / 症状 / 治疗</span></div>
-          <div><strong>对话</strong><span>连续追问与护理建议</span></div>
-        </div>
+        <RouterLink to="/HomeView" class="ai-primary-btn">
+          立即开始问诊
+          <ion-icon name="arrow-forward-outline"></ion-icon>
+        </RouterLink>
       </section>
     </main>
 
@@ -366,70 +343,12 @@ import AppNavbar from '../components/AppNavbar.vue';
   line-height: 1.75;
 }
 
-.landing-prep {
-  margin-top: clamp(28px, 4vw, 48px);
-  padding: clamp(24px, 4vw, 40px);
-  border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius);
-  background: #fff;
-  box-shadow: var(--ai-shadow-sm);
-}
-
-.prep-head {
-  margin-bottom: 18px;
-}
-
-.prep-head .ai-section-sub {
-  margin: 6px 0 0;
-}
-
-.check-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-.check-list li {
+.landing-cta {
   display: flex;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 14px;
-  background: #f7fbfa;
-}
-
-.check-list li > span {
-  flex: 0 0 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--ai-primary-soft);
-  color: var(--ai-primary);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.check-list strong {
-  display: block;
-  color: var(--ai-ink);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.check-list small {
-  color: var(--ai-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.landing-about {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
-  gap: 30px;
   align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
   margin-top: clamp(28px, 4vw, 48px);
   padding: clamp(24px, 4vw, 40px);
   border: 1px solid var(--ai-line);
@@ -438,42 +357,23 @@ import AppNavbar from '../components/AppNavbar.vue';
   box-shadow: var(--ai-shadow-sm);
 }
 
-.about-copy h2 {
-  margin: 0 0 10px;
+.landing-cta h2 {
+  margin: 0 0 8px;
+  color: var(--ai-ink);
+  font-size: clamp(22px, 2.4vw, 30px);
+  letter-spacing: -0.02em;
 }
 
-.about-copy p {
+.landing-cta p {
   margin: 0;
-  color: var(--ai-ink-soft);
-  font-size: 14px;
-  line-height: 1.85;
-}
-
-.about-metrics {
-  display: grid;
-  gap: 10px;
-}
-
-.about-metrics > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--ai-line);
-  border-radius: 14px;
-  background: #fff;
-}
-
-.about-metrics strong {
-  color: var(--ai-primary);
-  font-size: 16px;
-}
-
-.about-metrics span {
+  max-width: 620px;
   color: var(--ai-muted);
-  font-size: 12px;
-  text-align: right;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.landing-cta .ai-primary-btn {
+  flex: 0 0 auto;
 }
 
 .landing-footer {
@@ -494,19 +394,11 @@ import AppNavbar from '../components/AppNavbar.vue';
     grid-template-columns: 1fr;
   }
 
-  .landing-about {
-    grid-template-columns: 1fr;
-  }
-
   .hero-visual {
     min-height: 380px;
   }
 
   .landing-features {
-    grid-template-columns: 1fr;
-  }
-
-  .check-list {
     grid-template-columns: 1fr;
   }
 }
@@ -526,7 +418,8 @@ import AppNavbar from '../components/AppNavbar.vue';
   }
 
   .hero-actions .ai-primary-btn,
-  .hero-actions .ai-ghost-btn {
+  .hero-actions .ai-ghost-btn,
+  .landing-cta .ai-primary-btn {
     width: 100%;
   }
 

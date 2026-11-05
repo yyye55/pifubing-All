@@ -40,6 +40,8 @@ func SetupRouter() *gin.Engine {
 	r.GET("/predict/only/text", controller.PredictOnlyText)
 	//仅文字问诊的流式版本，响应为 text/event-stream
 	r.GET("/predict/only/text/stream", controller.PredictOnlyTextStream)
+	// 刷新页面后恢复正在生成/刚生成完的 AI 回答进度（进程内登记表）
+	r.GET("/predict/stream/status", controller.GetLiveStreamStatus)
 	// 创建学生相关的路由组
 	studentsGroup := r.Group("/users")
 	studentsGroup.Use(middlewares.Authenticate) // 为学生相关路由组添加公共的中间件

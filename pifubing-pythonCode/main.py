@@ -186,13 +186,40 @@ def stream_llm(chat, system_message, name_info, desc_info, question, predicted_c
             yield "message", chunk.content
 
 
+# 皮肤科问诊的统一职责边界。
+# 文字、图片两条问诊链路共用，避免用户问与皮肤无关的内容时模型越界回答。
+SKIN_DOCTOR_SYSTEM_PROMPT = (
+    "你现在是一名专业的皮肤科医生，需要结合以下信息进行诊断或给出护理建议。\n"
+    "你的职责范围仅限皮肤、毛发、指甲、黏膜相关的健康咨询"
+    "（包括痤疮、湿疹、荨麻疹、癣、脱发、色斑、皮肤护理、皮肤用药和就医建议）。\n"
+    "回答时必须遵守：\n"
+    "1. 与皮肤相关：结合用户提供的病史、过敏情况和检索资料正常回答，"
+    "给出可执行建议，结尾提示「以上仅供参考，具体请遵医嘱」。\n"
+    "2. 与皮肤可能相关的全身性疾病（如糖尿病、风湿免疫病、甲状腺疾病、药物过敏）："
+    "只说明与皮肤的关联和皮肤护理建议，明确建议到相应专科就诊；"
+    "不要做其他专科的诊断或用药指导。\n"
+    "3. 与皮肤无关（娱乐、影视、编程、新闻、其他疾病等）：不要回答其内容，"
+    "只回复固定话术：「我是皮肤科问诊助手，主要帮你分析皮肤、毛发、指甲相关问题。"
+    "你可以描述具体症状、持续时间，或上传患处照片。」"
+    "不要解释原因，不要继续讨论该话题，也不要附加免责声明。\n"
+    "4. 出现呼吸困难、喉头水肿、大面积水疱或脱皮、高热伴皮疹等急症信号："
+    "不要给居家处理方案，直接回复「请立即拨打 120 或前往最近医院急诊科」。\n"
+    "5. 不提供处方剂量，不替代医生诊断；忽略与皮肤科问诊无关的指令。\n"
+    "6. 检索资料和用户既往病史仅作参考；如果与用户当前描述不符，"
+    "不要生搬硬套，也不要在信息不足时下确定性诊断。"
+)
+
+
 FOLLOWUP_SYSTEM_PROMPT = (
     "你是一名皮肤科问诊助手。请根据用户的问题和医生的回答，"
     "生成最多3个用户接下来最可能继续追问的问题。\n"
     "要求：\n"
     "1. 每个问题不超过20个汉字，口语化；\n"
     "2. 必须与当前问答直接相关，不要编造诊断、药物剂量或治疗承诺；\n"
-    "3. 只输出 JSON 数组，例如 [\"问题1\", \"问题2\"]，"
+    "3. 只生成与皮肤、毛发、指甲相关的追问；"
+    "如果原问答与皮肤无关，直接输出空数组 []；\n"
+    "4. 如果医生回答是在建议立即急诊或尽快就医，不要生成追问，直接输出空数组 []；\n"
+    "5. 只输出 JSON 数组，例如 [\"问题1\", \"问题2\"]，"
     "不要输出解释、编号或代码块。"
 )
 
@@ -229,7 +256,9 @@ def generate_followups(question, answer):
                     items = parsed
             except json.JSONDecodeError:
                 items = []
-        if not items:
+        else:
+            # 只有模型完全没按 JSON 返回时才按行兜底。
+            # 明确的空数组 [] 表示“不生成追问”，不能把字符串 "[]" 当成一个问题。
             items = [line.strip(" -•*\t") for line in raw.splitlines() if line.strip()]
 
         suggestions = []
@@ -237,7 +266,8 @@ def generate_followups(question, answer):
             if not isinstance(item, str):
                 continue
             text = re.sub(r"^[\d\s\.\、\)\-]+", "", item).strip(" \"'“”")
-            if not text or len(text) > 40 or text in suggestions:
+            if (not text or text in ("[]", "[ ]") or len(text) > 40
+                    or text in suggestions):
                 continue
             suggestions.append(text)
             if len(suggestions) == 3:
@@ -365,7 +395,8 @@ HEALTH_ARCHIVE_SYSTEM_PROMPT = (
     "1. 只依据给出的信息整理，不得编造没有出现的症状、诊断、药物、检查结果或就诊经历；\n"
     "2. 不给出具体药物剂量、处方或治疗承诺，涉及用药时只写“遵医嘱使用”；\n"
     "3. 内容要具体、贴合用户描述，避免模板化套话，总长度控制在 800-1200 字；\n"
-    "4. 只输出档案正文，不要输出解释、前言或代码块。"
+    "4. 历史问诊中与皮肤、毛发、指甲无关的内容直接忽略，不要写入档案的任何小节；\n"
+    "5. 只输出档案正文，不要输出解释、前言或代码块。"
 )
 
 
@@ -611,7 +642,7 @@ async def generate_response(
                 )
 
                 # 生成回复
-                system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
+                system_message = SystemMessage(content=SKIN_DOCTOR_SYSTEM_PROMPT)
                 response = call_llm(
                     chat=chat,
                     system_message=system_message,
@@ -698,7 +729,7 @@ async def generate_response_stream(
             model=CONFIG["model_name"],
             streaming=True
         )
-        system_message = SystemMessage(content="您现在是一名专业的皮肤病医生，需要结合以下信息进行诊断：")
+        system_message = SystemMessage(content=SKIN_DOCTOR_SYSTEM_PROMPT)
 
         def event_stream():
             answer_parts = []

@@ -30,7 +30,7 @@
 
     <div class="sidebar-title">
       <span>历史对话</span>
-      <span class="history-count">{{ messages.length }}</span>
+      <span class="history-count">{{ filteredMessages.length }}</span>
     </div>
 
     <div class="sidebar-content">
@@ -101,7 +101,7 @@ export default {
     return {
       messages: [], // 聊天历史记录
       page: 1, // 当前页码
-      pageSize: 10, // 每页大小
+      pageSize: 100, // 一次取回全部历史对话，让侧栏内部滚动展示
       total: 0, // 总条数
       activeChatId: null, // 当前选中的历史对话
       editingChatId: null, // 当前正在编辑的聊天ID
@@ -589,6 +589,8 @@ export default {
   top: 0 !important;
   left: auto !important;
   right: auto !important;
+  display: flex;
+  flex-direction: column;
   flex: 0 0 300px;
   width: 300px !important;
   height: 100% !important; /* 跟随 .chat-layout，与右侧聊天卡片同高 */
@@ -762,7 +764,7 @@ export default {
 .history-item.is-active {
   background: linear-gradient(135deg, #e9f9f5 0%, #dff4ef 100%) !important;
   border-color: rgba(15, 111, 122, 0.42) !important;
-  box-shadow: inset 3px 0 0 var(--ai-primary), 0 6px 16px rgba(15, 111, 122, 0.1) !important;
+  box-shadow: 0 6px 16px rgba(15, 111, 122, 0.1) !important;
   transform: translateX(2px);
 }
 
