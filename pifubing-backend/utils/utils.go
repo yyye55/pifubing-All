@@ -169,9 +169,15 @@ type textStreamPayload struct {
 	Error       string   `json:"error"`
 }
 
-// CallTextStream 调用 Python 的 /process_text_stream，并把每个 chunk 转发给浏览器。
+// TextStreamEmitter 负责把一个流式事件写给浏览器。
+// 返回值表示客户端是否还在：false 时调用方仍会继续读取上游，
+// 只是不再写响应，保证用户切走后回答还能完整生成并保存。
+type TextStreamEmitter func(event string, payload interface{}) bool
+
+// CallTextStream 调用 Python 的 /process_text_stream，并通过 emit 把每个 chunk 转发给浏览器。
+// ctx 不再使用浏览器请求上下文：浏览器断开不应取消上游，否则回答会半途中止。
 // 返回值是完整回答，供调用方在流结束后写入数据库和 Redis。
-func CallTextStream(fullConversation string, c *gin.Context) (string, error) {
+func CallTextStream(ctx context.Context, fullConversation string, emit TextStreamEmitter) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -194,8 +200,8 @@ func CallTextStream(fullConversation string, c *gin.Context) (string, error) {
 	defaultStreamURL := strings.TrimSuffix(textAPIURL, "/process_text") + "/process_text_stream"
 	apiURL := getEnvOrDefault("AI_TEXT_STREAM_API_URL", defaultStreamURL)
 
-	// 绑定浏览器请求的上下文：用户关闭页面或中止请求时，同步取消上游 Python 流。
-	req, err := http.NewRequestWithContext(c.Request.Context(), "POST", apiURL, &body)
+	// 使用调用方传入的上下文（后台超时上下文），与浏览器连接解耦。
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &body)
 	if err != nil {
 		return "", fmt.Errorf("创建流式请求失败: %v", err)
 	}
@@ -244,21 +250,20 @@ func CallTextStream(fullConversation string, c *gin.Context) (string, error) {
 			return fullResponseText, fmt.Errorf("%s", payload.Error)
 		}
 
-		if payload.Thoughts != "" {
-			c.SSEvent("thoughts", gin.H{"thoughts": payload.Thoughts})
-			c.Writer.Flush()
+		if payload.Thoughts != "" && emit != nil {
+			emit("thoughts", gin.H{"thoughts": payload.Thoughts})
 		}
 
-		if len(payload.Suggestions) > 0 {
-			c.SSEvent("suggestions", gin.H{"suggestions": payload.Suggestions})
-			c.Writer.Flush()
+		if len(payload.Suggestions) > 0 && emit != nil {
+			emit("suggestions", gin.H{"suggestions": payload.Suggestions})
 		}
 
 		if payload.Content != "" {
 			fullResponseText += payload.Content
 			// 用 JSON 包一层，避免回答里的换行破坏 SSE 的 data 边界
-			c.SSEvent("message", gin.H{"content": payload.Content})
-			c.Writer.Flush()
+			if emit != nil {
+				emit("message", gin.H{"content": payload.Content})
+			}
 		}
 	}
 
@@ -331,6 +336,65 @@ func GenerateFollowups(ctx context.Context, question, answer string) []string {
 		}
 	}
 	return suggestions
+}
+
+type healthArchivePayload struct {
+	Archive string `json:"archive"`
+}
+
+// GenerateHealthArchive 让 Python 根据个人皮肤情况和问诊记录生成健康档案。
+// 返回的是 Markdown 文本；调用失败或模型返回空内容时返回 error，
+// 由 controller 决定是提示用户稍后重试，而不是展示一份空档案。
+func GenerateHealthArchive(ctx context.Context, profile, history string) (string, error) {
+	if strings.TrimSpace(profile) == "" && strings.TrimSpace(history) == "" {
+		return "", fmt.Errorf("没有可用于生成健康档案的数据")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("profile", profile); err != nil {
+		return "", err
+	}
+	if err := writer.WriteField("history", history); err != nil {
+		return "", err
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+
+	// 和追问、热门问题接口一样，默认从 AI_TEXT_API_URL 推导出档案接口地址。
+	textAPIURL := getEnvOrDefault("AI_TEXT_API_URL", "http://8.137.81.23:8001/process_text")
+	defaultArchiveURL := strings.TrimSuffix(textAPIURL, "/process_text") + "/generate_health_archive"
+	apiURL := getEnvOrDefault("AI_HEALTH_ARCHIVE_API_URL", defaultArchiveURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// 档案需要汇总多条问诊并生成更长正文，模型耗时较长，但前端不能无限等待。
+	client := &http.Client{Timeout: 85 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("AI 服务返回状态码 %d", resp.StatusCode)
+	}
+
+	var payload healthArchivePayload
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+
+	archive := strings.TrimSpace(payload.Archive)
+	if archive == "" {
+		return "", fmt.Errorf("AI 未返回健康档案内容")
+	}
+	return archive, nil
 }
 
 // HotQuestion 是首页空状态快捷提问需要的短标题和完整问题。

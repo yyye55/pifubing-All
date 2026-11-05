@@ -62,6 +62,9 @@ func SetupRouter() *gin.Engine {
 	//用户查询所有个人历史记录
 	studentsGroup.GET("/check_users_history", controller.Check_users_history)
 
+	//根据个人皮肤病情况和问诊记录生成 AI 健康档案
+	studentsGroup.GET("/health_archive", controller.GetHealthArchive)
+
 	// 通过图片预测接口，进入后端
 	//studentsGroup.POST("/predict/image", controller.PredictImage)
 

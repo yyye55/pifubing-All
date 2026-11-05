@@ -719,9 +719,31 @@ func CallLargeModelAPIForText(conversation ConversationData) (string, error) {
 	return string(result), nil
 }
 
+// chatExists 判断对话是否仍属于该用户。
+// 回答生成可能持续几十秒，期间用户可能已经删除对话；
+// 保存前再确认一次，避免把完整回答写进一个已删除的对话，留下孤儿记录。
+func chatExists(chatID, userID int) bool {
+	if chatID <= 0 {
+		return false
+	}
+	var count int64
+	if err := dao.DB.Model(&models.Chat{}).
+		Where("id = ? AND user_id = ?", chatID, userID).
+		Count(&count).Error; err != nil {
+		log.Printf("检查对话是否存在失败: %v", err)
+		return false
+	}
+	return count > 0
+}
+
 // 使用异步处理,减少前端响应时间
 func saveImageMessageAsync(saveResponse *models.Response) {
 	go func() {
+		// 对话在回答生成期间被删除时不再保存，避免留下孤儿记录。
+		if !chatExists(saveResponse.Chat_id, saveResponse.User_id) {
+			log.Printf("对话 %d 不存在或已删除，跳过保存问诊记录", saveResponse.Chat_id)
+			return
+		}
 		//异步保存数据到数据库
 		if dbErr := models.SaveToDataBase(dao.DB, saveResponse); dbErr != nil {
 			log.Printf("保存到数据库失败: %v", dbErr)
@@ -1563,6 +1585,137 @@ func Check_users_history(c *gin.Context) {
 		"code":    200,
 		"message": "查询个人信息成功",
 		"data":    history,
+	})
+}
+
+// healthArchiveHistoryLimit 限制参与生成档案的问诊条数（最多 12 条）。
+// 12 条已经足够概括近期情况，也能避免提示词过长、模型耗时过久。
+const healthArchiveHistoryLimit = 12
+
+// truncateForArchive 按字符（而不是字节）截断文本，避免中文被切成乱码。
+func truncateForArchive(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
+}
+
+// buildArchiveProfile 把用户填写的个人情况拼成一段文字，交给大模型整理。
+func buildArchiveProfile(info Users_all_information) string {
+	// 建档日期让档案带有明确的时间信息，便于用户后续对照复诊。
+	parts := make([]string, 0, 6)
+	parts = append(parts, "建档日期："+time.Now().Format("2006-01-02"))
+	if name := strings.TrimSpace(info.Name); name != "" {
+		parts = append(parts, "姓名："+truncateForArchive(name, 30))
+	}
+	if info.Age > 0 {
+		parts = append(parts, fmt.Sprintf("年龄：%d 岁", info.Age))
+	}
+	if gender := strings.TrimSpace(info.Gender); gender != "" {
+		parts = append(parts, "性别："+truncateForArchive(gender, 10))
+	}
+	if medicalHistory := strings.TrimSpace(info.Medical_history); medicalHistory != "" {
+		parts = append(parts, "皮肤病/既往病史："+truncateForArchive(medicalHistory, 500))
+	}
+	if allergies := strings.TrimSpace(info.Allergies); allergies != "" {
+		parts = append(parts, "过敏史："+truncateForArchive(allergies, 500))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// GetHealthArchive 根据当前用户的个人皮肤病情况和最近问诊记录，
+// 调用 Python 大模型生成一份 Markdown 健康档案。
+func GetHealthArchive(c *gin.Context) {
+	// 档案会随个人信息和问诊记录变化，禁止浏览器/代理缓存旧结果。
+	c.Header("Cache-Control", "no-store")
+
+	userID, err := ValidateToken(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	var info Users_all_information
+	if err := models.Check_users_information(dao.DB, (*models.Users_all_information)(&info), userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": "无法查询个人信息",
+		})
+		return
+	}
+
+	history, err := models.Check_recent_users_history(dao.DB, userID, healthArchiveHistoryLimit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":  100,
+			"error": "无法查询历史问诊记录",
+		})
+		return
+	}
+
+	profile := buildArchiveProfile(info)
+	historyParts := make([]string, 0, len(history))
+	// 表里没有时间字段，按数据库返回顺序拼接；顺序不影响档案归纳结果。
+	for _, item := range history {
+		ask := strings.TrimSpace(item.Ask)
+		message := strings.TrimSpace(item.Message)
+		if ask == "" && message == "" {
+			continue
+		}
+		label := strings.TrimSpace(item.Type)
+		if label == "" {
+			label = "皮肤问诊"
+		}
+		historyParts = append(historyParts, fmt.Sprintf(
+			"【%s】\n用户描述：%s\nAI 建议：%s",
+			label,
+			truncateForArchive(ask, 350),
+			truncateForArchive(message, 350),
+		))
+	}
+	historyText := strings.Join(historyParts, "\n\n")
+	// 明确告诉模型记录条数，便于在档案概览中说明数据来源。
+	if len(historyParts) > 0 {
+		historyText = fmt.Sprintf("共 %d 条问诊记录：\n\n%s", len(historyParts), historyText)
+	}
+
+	// 只有姓名、年龄等基础资料、但没有皮肤病情况和问诊记录时，
+	// 生成的档案没有实际意义，直接返回空内容，不调用大模型。
+	hasSkinInfo := strings.TrimSpace(info.Medical_history) != "" ||
+		strings.TrimSpace(info.Allergies) != ""
+	if !hasSkinInfo && historyText == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "暂无可生成健康档案的数据",
+			"data": gin.H{
+				"archive":      "",
+				"record_count": 0,
+			},
+		})
+		return
+	}
+
+	archive, err := utils.GenerateHealthArchive(c.Request.Context(), profile, historyText)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"code":  500,
+			"error": "AI 健康档案生成失败，请稍后重试",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "生成健康档案成功",
+		"data": gin.H{
+			"archive":      archive,
+			"record_count": len(historyParts),
+		},
 	})
 }
 
@@ -2467,10 +2620,6 @@ func PredictImage(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
 		return
 	}
-	var localFilePath string
-	var url string
-	var baseName string
-	file, err := c.FormFile("file")
 
 	// 获取文本参数
 	conversation := c.PostForm("conversation")
@@ -2478,72 +2627,100 @@ func PredictImage(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "Text parameter is required"})
 		return
 	}
-	if err == nil {
-		// 获取文件名（不带路径和扩展名）
-		fileName := file.Filename
-		// 去除文件扩展名
-		ext := filepath.Ext(fileName)
-		baseName = fileName[:len(fileName)-len(ext)]
 
-		// 保存上传的文件到本地
-		localFilePath = "./temp/" + fileName
+	var localFilePath string
+	var url string
+	// urls 是本次上传的每一张图片的 OSS 地址，前端用它保存历史记录。
+	urls := make([]string, 0, 3)
 
-		// 保存上传的文件到本地
-		if err := c.SaveUploadedFile(file, localFilePath); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("保存文件失败: %v", err)})
+	var files []*multipart.FileHeader
+	if c.ContentType() == "multipart/form-data" {
+		form, formErr := c.MultipartForm()
+		if formErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": fmt.Sprintf("解析上传文件失败: %v", formErr)})
 			return
 		}
-		// 无论后续成功还是被质量/置信度门槛拦下，都清理临时文件，
-		// 避免 code:201/202 提前返回时在 ./temp 里堆积图片。
-		defer func() {
-			if err := os.Remove(localFilePath); err != nil {
-				fmt.Printf("删除上传文件失败: %v\n", err)
-			}
-		}()
-
-		// 判断是否是一个压缩包
-		if ext == ".zip" {
-			// 解压文件
-			destPath := "./temp/unzipped"
-			err = unzipFile(localFilePath, destPath)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 100,
-					"error": fmt.Sprintf("解压文件失败: %v", err),
-				})
-				return
-			}
-
-			ossPath := fmt.Sprintf("%s/zip/%s", strconv.Itoa(userID), fileName)
-
-			fileUrl, err := UploadToOSS(localFilePath, ossPath)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":  100,
-					"error": fmt.Sprintf("文件上传到OSS失败: %v", err),
-				})
-				return
-			}
-			url = fileUrl
-		} else {
-			// 如果上传的文件是单个图片，直接上传到 OSS
-			// 上传图片到 OSS
-			ossPath := fmt.Sprintf("%s/image/%s", strconv.Itoa(userID), fileName)
-			fileUrl, err := UploadToOSS(localFilePath, ossPath)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":  100,
-					"error": fmt.Sprintf("图片上传到OSS失败: %v", err),
-				})
-				return
-			}
-			url = fileUrl
-		}
-	} else {
-		// 如果未上传文件，记录空的文件路径和URL
-		localFilePath = ""
-		url = ""
+		files = form.File["file"]
 	}
-	fmt.Println(baseName)
+
+	// 前端已限制 3 张，这里再做一次服务端校验，防止绕过前端提交超量图片。
+	if len(files) > 3 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "最多只能上传3张图片"})
+		return
+	}
+
+	if len(files) > 0 {
+		tempDir, dirErr := os.MkdirTemp("./temp", "predict-")
+		if dirErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("创建临时目录失败: %v", dirErr)})
+			return
+		}
+		// 无论后续成功还是被质量/置信度门槛拦下，都清理本次请求的临时文件，
+		// 避免 code:201/202 提前返回时在 ./temp 里堆积图片。
+		defer os.RemoveAll(tempDir)
+
+		savedPaths := make([]string, 0, len(files))
+		for index, file := range files {
+			fileName := filepath.Base(file.Filename)
+			localPath := filepath.Join(tempDir, fmt.Sprintf("%d_%s", index+1, fileName))
+			if saveErr := c.SaveUploadedFile(file, localPath); saveErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("保存文件失败: %v", saveErr)})
+				return
+			}
+			savedPaths = append(savedPaths, localPath)
+		}
+
+		// 兼容用户直接上传单个压缩包的情况。
+		if len(files) == 1 && strings.ToLower(filepath.Ext(files[0].Filename)) == ".zip" {
+			destPath := filepath.Join(tempDir, "unzipped")
+			if unzipErr := unzipFile(savedPaths[0], destPath); unzipErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 100,
+					"error": fmt.Sprintf("解压文件失败: %v", unzipErr),
+				})
+				return
+			}
+
+			ossPath := fmt.Sprintf("%s/zip/%d_%s", strconv.Itoa(userID), time.Now().UnixNano(), filepath.Base(files[0].Filename))
+			fileUrl, uploadErr := UploadToOSS(savedPaths[0], ossPath)
+			if uploadErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":  100,
+					"error": fmt.Sprintf("文件上传到OSS失败: %v", uploadErr),
+				})
+				return
+			}
+			url = fileUrl
+			localFilePath = savedPaths[0]
+		} else {
+			// 每张图片单独上传 OSS，返回可展示的 urls；
+			// 多图时再额外打包 zip 给 Python，复用其多图聚合逻辑。
+			for index, file := range files {
+				ossPath := fmt.Sprintf("%s/image/%d_%d_%s", strconv.Itoa(userID), time.Now().UnixNano(), index+1, filepath.Base(file.Filename))
+				fileUrl, uploadErr := UploadToOSS(savedPaths[index], ossPath)
+				if uploadErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":  100,
+						"error": fmt.Sprintf("图片上传到OSS失败: %v", uploadErr),
+					})
+					return
+				}
+				urls = append(urls, fileUrl)
+			}
+			url = urls[0]
+
+			if len(files) == 1 {
+				localFilePath = savedPaths[0]
+			} else {
+				zipPath := filepath.Join(tempDir, "images.zip")
+				if zipErr := createZipFromFiles(savedPaths, zipPath); zipErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("打包图片失败: %v", zipErr)})
+					return
+				}
+				localFilePath = zipPath
+			}
+		}
+	}
+
 	// 调用大模型接口进行图片预测
 	modelResponse, modelErr := CallLargeModelAPIForImageAndZip(localFilePath, conversation)
 	if modelErr != nil {
@@ -2595,7 +2772,53 @@ func PredictImage(c *gin.Context) {
 		"data":    response,
 		"user_id": userID,
 		"url":     url,
+		"urls":    urls,
 	}) // 临时文件由函数开头的 defer 统一清理
+}
+
+// createZipFromFiles 把多张图片打包成一个 zip，供 Python 的多图分析流程使用。
+func createZipFromFiles(paths []string, zipPath string) error {
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+
+	writer := zip.NewWriter(zipFile)
+	for index, path := range paths {
+		src, openErr := os.Open(path)
+		if openErr != nil {
+			writer.Close()
+			return openErr
+		}
+		info, statErr := src.Stat()
+		if statErr != nil {
+			src.Close()
+			writer.Close()
+			return statErr
+		}
+		header, headerErr := zip.FileInfoHeader(info)
+		if headerErr != nil {
+			src.Close()
+			writer.Close()
+			return headerErr
+		}
+		header.Name = fmt.Sprintf("%02d_%s", index+1, filepath.Base(path))
+		header.Method = zip.Deflate
+		dst, createErr := writer.CreateHeader(header)
+		if createErr != nil {
+			src.Close()
+			writer.Close()
+			return createErr
+		}
+		if _, copyErr := io.Copy(dst, src); copyErr != nil {
+			src.Close()
+			writer.Close()
+			return copyErr
+		}
+		src.Close()
+	}
+	return writer.Close()
 }
 
 // BaseResponse 结构体定义，严格按照图片中的字段
@@ -2839,21 +3062,43 @@ func PredictOnlyTextStream(c *gin.Context) {
 	_, _ = c.Writer.Write([]byte(": connected\n\n"))
 	c.Writer.Flush()
 
-	fullText, streamErr := utils.CallTextStream(fullConversation, c)
+	// 用后台上下文而不是 c.Request.Context()：用户切换对话/关闭页面时浏览器会断开，
+	// 但上游大模型请求仍要继续读完，回答才能保存进历史记录。
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancelStream()
+
+	// 客户端断开后 emit 返回 false；CallTextStream 会忽略返回值继续读取上游，
+	// 因此这里只负责“还连着就写”，不再承担“决定是否继续生成”的职责。
+	emit := func(event string, payload interface{}) bool {
+		if c.Request.Context().Err() != nil {
+			return false
+		}
+		c.SSEvent(event, payload)
+		c.Writer.Flush()
+		return true
+	}
+
+	fullText, streamErr := utils.CallTextStream(streamCtx, fullConversation, emit)
 	if streamErr != nil {
 		log.Printf("文字流式回答失败: %v", streamErr)
-		c.SSEvent("error", gin.H{"message": "AI 服务暂时不可用，请稍后再试"})
-		c.Writer.Flush()
+		// 浏览器已经断开时不用再推错误事件，保存逻辑也不执行（没有完整回答）。
+		if c.Request.Context().Err() == nil {
+			c.SSEvent("error", gin.H{"message": "AI 服务暂时不可用，请稍后再试"})
+			c.Writer.Flush()
+		}
 		return
 	}
 
 	if strings.TrimSpace(fullText) == "" {
-		c.SSEvent("error", gin.H{"message": "AI 未返回内容，请稍后再试"})
-		c.Writer.Flush()
+		if c.Request.Context().Err() == nil {
+			c.SSEvent("error", gin.H{"message": "AI 未返回内容，请稍后再试"})
+			c.Writer.Flush()
+		}
 		return
 	}
 
 	// 流结束后再保存，历史记录里看到的是完整回答。
+	// saveImageMessageAsync 内部会再次确认对话还在，避免用户已删除对话时写入孤儿数据。
 	saveImageMessageAsync(&models.Response{
 		Chat_id:    chatID,
 		User_id:    userID,
@@ -2868,7 +3113,9 @@ func PredictOnlyTextStream(c *gin.Context) {
 		models.Rdb.LTrim(ctx, conversationKey, -2, -1)
 	}
 
-	// 明确告诉前端流已经正常结束。
-	c.SSEvent("done", gin.H{"ok": true})
-	c.Writer.Flush()
+	// 明确告诉前端流已经正常结束；浏览器断开时跳过写响应。
+	if c.Request.Context().Err() == nil {
+		c.SSEvent("done", gin.H{"ok": true})
+		c.Writer.Flush()
+	}
 }

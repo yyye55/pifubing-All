@@ -49,6 +49,8 @@ pifubing-pythonCode/*.log
 pifubing-pythonCode/faiss_index/
 # 本地模拟数据，仅用于调试检索链路
 pifubing-pythonCode/mock_data/
+# 训练产物（best/last 权重、日志），只在本地保留
+pifubing-pythonCode/training/runs/
 # 本地校验脚本与备份文件
 pifubing-pythonCode/check_kb.py
 pifubing-pythonCode/check_model.py

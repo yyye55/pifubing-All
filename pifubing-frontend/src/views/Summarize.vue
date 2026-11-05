@@ -1,1195 +1,729 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import axios from 'axios';
-import { ElAvatar, ElRow, ElCol, ElCard, ElForm, ElFormItem, ElInput, ElButton, ElDialog, ElMessage } from 'element-plus';
+import { marked } from 'marked';
+import {
+  ElAvatar,
+  ElButton,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElInput,
+  ElMessage
+} from 'element-plus';
 
 import { useRouter } from 'vue-router';
 import AppNavbar from '../components/AppNavbar.vue';
 
-
-// 获取 token
+// token 在打开页面时读取一次；后续请求都带同一个 Bearer Token。
 const token = localStorage.getItem('token');
 const router = useRouter();
-// 上传头像后保存到 LocalStorage
 
-
-// 初始化 avatarUrl 和 backgroundImage
 const avatarUrl = ref('');
-const backgroundImage = ref('');
-//const backgroundImage = ref(require('../assets/images'));  // 使用 require 来加载本地图片
+const avatarInput = ref(null);
 
-// 表单数据
+// 表单同时承载“个人信息”和“个人皮肤病情况”两组字段。
 const formData = ref({
   account: '',
   email: '',
   name: '',
   age: '',
   gender: '',
-  phone_number: '',  // 新增字段
-  medicalHistory: '',  // 用于保存病史
-  allergyHistory: ''   // 用于保存过敏史
+  phone_number: '',
+  medicalHistory: '',
+  allergyHistory: ''
 });
 
-// 编辑状态
-const isEditable = ref(false);  // 用于控制个人信息的编辑状态
-const isMedicalEditable = ref(false); // 用于控制病史和过敏史的编辑状态
+// 个人信息和皮肤病史共用同一个编辑状态。
+const isEditable = ref(false);
+// 提交中状态用于按钮 loading 和防止重复点击。
+const isSubmitting = ref(false);
+const isUploadingAvatar = ref(false);
 
-// 获取头像 input 的 ref
-const avatarInput = ref(null);
+// AI 健康档案：archiveError 与 healthArchive 二选一展示。
+const healthArchive = ref('');
+const archiveLoading = ref(false);
+const archiveError = ref('');
+// 每次请求分配一个序号；旧请求晚到时直接丢弃，避免覆盖新结果。
+let archiveRequestId = 0;
 
+// 档案缓存：同一登录会话内再次进入个人中心时直接使用缓存，
+// 只有重新编辑并提交个人信息，或点击“重新生成”时才真正调用模型。
+const ARCHIVE_CACHE_KEY = 'ai_health_archive_cache';
 
-// 获取隐藏的文件输入框
-const backgroundImageInput = ref(null);
-
-// 选择背景图片按钮的处理函数
-const selectBackgroundImage = () => {
-  // 模拟点击文件选择器
-  backgroundImageInput.value.click();
-};
-
-const medicalHistoryData = ref([
-  { type: '高血压', message: '多吃蔬菜水果，避免油腻食物，多运动。', ask: '头晕，胸闷', confidence: 85, url: '' },
-  { type: '糖尿病', message: '控制饮食，定期检查血糖。', ask: '口渴，乏力', confidence: 90, url: '' },
-  // 更多数据...
-]);
-
-const dialogVisible = ref(false);  // 控制弹框的显示与隐藏
-const selectedItem = ref(null);  // 存储点击的健康历史记录
-
-// 截断长消息，限制显示长度
-const truncateMessage = (message) => {
-  // 限制显示长度为 80 个字符，超过则加上 "..."
-  return message.length > 80 ? message.slice(0, 80) + '...' : message;
-};
-
-// 显示完整建议的函数
-const showFullMessage = (item) => {
-  selectedItem.value = item;  // 设置点击的记录为选中的项
-  dialogVisible.value = true;  // 显示弹框
-}
-
-// 用户查找所有个人信息
-const loadUserData = async () => {  // renamed function
+const readCachedArchive = () => {
   try {
-    if (!token) {
-      useRouter().push('/');  // 如果没有 token，跳转到登录页面
-      console.error('未登录，请先登录');
-      return;
+    const raw = sessionStorage.getItem(ARCHIVE_CACHE_KEY);
+    if (!raw) return '';
+    const cache = JSON.parse(raw);
+    // token 绑定登录态；重新登录后 token 变化，不会复用上一次登录的档案。
+    if (cache?.token === token && typeof cache.archive === 'string') {
+      return cache.archive;
     }
-    const response = await axios.get(
-      '/users/check_users_information',
-      {
-        headers: {
-          Authorization: `Bearer ${token}`  // 将 Bearer token 包含在请求头中
-        }
+  } catch (error) {
+    console.warn('读取 AI 健康档案缓存失败', error);
+  }
+  return '';
+};
+
+const writeCachedArchive = (archive) => {
+  if (!archive) return;
+  try {
+    sessionStorage.setItem(ARCHIVE_CACHE_KEY, JSON.stringify({
+      token,
+      archive,
+      savedAt: Date.now()
+    }));
+  } catch (error) {
+    console.warn('写入 AI 健康档案缓存失败', error);
+  }
+};
+
+const displayName = computed(() => {
+  return formData.value.name?.trim() || formData.value.account?.trim() || '未命名用户';
+});
+
+// 把 AI 返回的 Markdown 渲染成 HTML。
+// marked 默认允许 HTML 透传，而档案最终进入 v-html，
+// 因此这里移除脚本类标签、事件属性和 javascript: 链接，降低 XSS 风险。
+const sanitizeHtml = (html) => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  doc.querySelectorAll('script, iframe, object, embed, style, link, meta, form, input, button')
+    .forEach((node) => node.remove());
+
+  doc.querySelectorAll('*').forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim().toLowerCase();
+      if (name.startsWith('on') || value.startsWith('javascript:')) {
+        node.removeAttribute(attribute.name);
       }
-    );
-    console.log('请求数据成功', response.data);
+    });
+  });
+
+  return doc.body.innerHTML;
+};
+
+const renderMarkdown = (text) => sanitizeHtml(
+  marked.parse(text || '', { breaks: true, gfm: true })
+);
+
+const enableEdit = () => {
+  isEditable.value = true;
+};
+
+// 查询个人基本信息。
+const loadUserData = async () => {
+  try {
+    const response = await axios.get('/users/check_users_information', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
 
     if (response.data.code === 200) {
-      const data = response.data.data;
-
-      // 提供默认值以避免空值
+      const data = response.data.data || {};
       formData.value = {
-        account: data.account || '暂无账号',
-        email: data.email || '暂无邮箱',
+        account: data.account || '',
+        email: data.email || '',
         name: data.name || '',
         age: data.age || '',
         gender: data.gender || '',
-        phone_number: data.phone_number || '',  // 新增字段
+        phone_number: data.phone_number || '',
         medicalHistory: data.medical_history || '',
         allergyHistory: data.allergies || ''
       };
 
-      // 更新头像 URL
-      avatarUrl.value = data.avatar_url || 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png';
-
-      // // 更新背景图片
-      // backgroundImage.value = 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRDijTs7b1Zmz0DHwcebyQOVdGXfB8eZVDYcg&s';
-      backgroundImage.value = '../assets/登.png';
+      avatarUrl.value = data.avatar_url
+        || 'https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png';
     }
   } catch (error) {
-    console.error('请求数据失败', error);
+    console.error('个人信息请求失败', error);
   }
 };
 
-// 在页面加载时请求数据
-onMounted(() => {
-  loadUserData();  // calling the renamed function
-});
+// 生成 AI 健康档案。加载失败只影响档案区域，不影响页面其他内容。
+const loadHealthArchive = async () => {
+  if (!token) {
+    return;
+  }
 
-// 提交个人信息
-const submitForm = async () => {
+  const requestId = ++archiveRequestId;
+  archiveLoading.value = true;
+  archiveError.value = '';
+
   try {
-    if (!token) {
-      useRouter().push('/');  // 如果没有 token，跳转到登录页面
-      console.error('未登录，请先登录');
+    const response = await axios.get('/users/health_archive', {
+      headers: { Authorization: `Bearer ${token}` },
+      // 模型需要汇总多条问诊并生成更长正文，给足时间；超时后提示用户重试。
+      timeout: 95000
+    });
+
+    // 组件已卸载或有更新的请求时，丢弃这次结果。
+    if (requestId !== archiveRequestId) {
       return;
     }
 
-    // 从 formData 获取用户填写的字段
-    const formDataToSubmit = {
-      account: formData.value.account,  // 用户填写的账号
-      email: formData.value.email,      // 用户填写的邮箱
-      name: formData.value.name,        // 用户填写的姓名
-      //age: formData.value.age,          // 用户填写的年龄
-      age: Number(formData.value.age),
-      gender: formData.value.gender,    // 用户填写的性别
-      phone_number: formData.value.phone_number ,// 用户填写的电话
-    };
-
-    console.log('提交的数据：', formDataToSubmit);
-
-    const response = await axios.post(
-      '/users/updates_users_information',  // 更新个人信息的接口
-      formDataToSubmit,  // 提交的 formData 数据
-      {
-        headers: {
-          Authorization: `Bearer ${token}`  // 将 Bearer token 包含在请求头中
-        }
-      }
-    );
-    
-    console.log('更新成功', response.data);
-    console.log('提交的数据：', formDataToSubmit);
-
     if (response.data.code === 200) {
-      ElMessage.success('个人信息更新成功');
-      // 更新成功后重新加载用户信息
-      loadUserData();
+      healthArchive.value = response.data.data?.archive || '';
+      // 生成成功后写入会话缓存，后续再次进入页面不再调用模型。
+      writeCachedArchive(healthArchive.value);
     } else {
-      ElMessage.error('更新失败：' + response.data.message);
+      healthArchive.value = '';
+      archiveError.value = response.data.error || 'AI 健康档案生成失败，请稍后重试';
     }
   } catch (error) {
-    console.error('提交失败', error);
-    ElMessage.error('提交失败');
+    if (requestId !== archiveRequestId) {
+      return;
+    }
+    console.error('健康档案请求失败', error);
+    healthArchive.value = '';
+    archiveError.value = error.code === 'ECONNABORTED'
+      ? 'AI 整理超时，请点击“重新生成”重试'
+      : 'AI 健康档案生成失败，请稍后重试';
+  } finally {
+    // 只有最新请求才能结束加载状态。
+    if (requestId === archiveRequestId) {
+      archiveLoading.value = false;
+    }
   }
 };
 
-// 提交病史和过敏史
-const submitDiseaseInfo = async () => {
+// 统一提交个人信息和皮肤病史；两组字段都保存成功后只刷新一次 AI 档案。
+const submitAll = async () => {
+  if (!isEditable.value || isSubmitting.value) {
+    return;
+  }
+
+  isSubmitting.value = true;
   try {
-    const response = await axios.post(
-      '/users/create_disease_information',
-      {
-        medical_history: formData.value.medicalHistory,
-        allergies: formData.value.allergyHistory
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`  // 将 Bearer token 包含在请求头中
-        }
-      }
-    );
-    console.log('病史和过敏史更新成功', response.data);
-
-    if (response.data.code === 200) {
-      ElMessage.success('病史和过敏史更新成功');
-      // 更新成功后重新加载用户信息
-      loadUserData();
-    } else {
-      ElMessage.error('更新失败：' + response.data.message);
-    }
-  } catch (error) {
-    console.error('提交病史和过敏史失败', error);
-    ElMessage.error('提交失败，请稍后再试');
-  }
-};
-
-// 处理头像上传
-const handleAvatarChange = async (event) => {
-  const file = event.target.files[0]; // 获取用户选择的文件
-
-  if (file) {
-    // 如果需要进行上传至服务器的操作，可以如下发送请求
-    const formData = new FormData();
-    formData.append('avatar', file);  // 将文件添加到表单数据中
-
-    try {
-      if (!token) {
-        ElMessage.warning('请先登录后再上传头像');
-        router.push('/HomeView');
-        return;
-      }
-
-      const response = await axios.post(
-        '/users/updates_avatar', // 头像更新的接口
-        formData,
+    const [profileResponse, diseaseResponse] = await Promise.all([
+      axios.post(
+        '/users/updates_users_information',
         {
-          headers: {
-            Authorization: `Bearer ${token}`,  // 将 Bearer token 包含在请求头中
-            'Content-Type': 'multipart/form-data'  // 指定内容类型为文件上传
-          }
-        }
+          account: formData.value.account.trim(),
+          email: formData.value.email.trim(),
+          name: formData.value.name.trim(),
+          age: Number(formData.value.age) || 0,
+          gender: formData.value.gender.trim(),
+          phone_number: formData.value.phone_number.trim()
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      ),
+      axios.post(
+        '/users/create_disease_information',
+        {
+          medical_history: formData.value.medicalHistory.trim(),
+          allergies: formData.value.allergyHistory.trim()
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+    ]);
+
+    const failedResponse = [profileResponse, diseaseResponse]
+      .find((response) => response.data.code !== 200);
+
+    if (failedResponse) {
+      ElMessage.error(
+        `更新失败：${failedResponse.data.error || failedResponse.data.message || '未知错误'}`
       );
-      console.log('头像上传成功', response.data);
-      if (response.data.code === 200) {
-        // 更新头像 URL
-        avatarUrl.value = response.data.data; // 使用服务器返回的 URL
-        localStorage.setItem('avatarUrl', response.data.data); // 更新 localStorage 中的头像 URL
-        ElMessage.success('头像上传成功！');
-        console.log('头像更新成功', response.data.data);
-      } else {
-        console.error('头像更新失败:', response.data.message);
-        ElMessage.error('头像更新失败：' + response.data.message);
-      }
-    } catch (error) {
-      console.error('请求失败', error);
-      ElMessage.error('上传失败，请稍后再试');
+      return;
     }
+
+    ElMessage.success('个人信息和健康信息更新成功');
+    // 提交成功后回到只读状态，编辑按钮恢复可用。
+    isEditable.value = false;
+    await loadUserData();
+    loadHealthArchive();
+  } catch (error) {
+    console.error('个人信息提交失败', error);
+    ElMessage.error('提交失败，请稍后再试');
+  } finally {
+    isSubmitting.value = false;
   }
 };
 
-
-
-// 修改按钮点击事件
-const enableEdit = () => {
-  isEditable.value = true;  // 启用编辑模式
+const openAvatarPicker = () => {
+  if (isUploadingAvatar.value) {
+    return;
+  }
+  avatarInput.value?.click();
 };
 
-// 修改病史和过敏史按钮点击事件
-const enableMedicalEdit = () => {
-  isMedicalEditable.value = true;  // 启用病史和过敏史的编辑模式
-};
+// 上传头像并同步导航栏使用的 localStorage.avatarUrl。
+const handleAvatarChange = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
 
+  if (!file.type.startsWith('image/')) {
+    ElMessage.warning('请选择图片文件');
+    event.target.value = '';
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.warning('头像图片不能超过 5MB');
+    event.target.value = '';
+    return;
+  }
 
-const loadMedicalHistory = async () => {
+  const uploadData = new FormData();
+  uploadData.append('avatar', file);
+
+  isUploadingAvatar.value = true;
   try {
-    if (!token) {
-      useRouter().push('/');  // If there's no token, redirect to login page
-      console.error('未登录，请先登录');
-      return;
-    }
-    const response = await axios.get(
-      '/users/check_users_history',  // New API endpoint
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,  // Include token in the request header
-        }
+    const response = await axios.post('/users/updates_avatar', uploadData, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'multipart/form-data'
       }
-    );
-    console.log('个人健康历史数据请求成功', response.data);
-    
+    });
+
     if (response.data.code === 200) {
-      medicalHistoryData.value = response.data.data || [];  // Store the response data
+      avatarUrl.value = response.data.data;
+      localStorage.setItem('avatarUrl', response.data.data);
+      ElMessage.success('头像上传成功！');
     } else {
-      console.error('查询失败：', response.data.message);
+      ElMessage.error(`头像更新失败：${response.data.error || response.data.message || '未知错误'}`);
     }
   } catch (error) {
-    console.error('请求失败', error);
+    console.error('头像上传失败', error);
+    ElMessage.error('上传失败，请稍后再试');
+  } finally {
+    isUploadingAvatar.value = false;
+    // 清空 input，保证连续选择同一张图片也能触发 change。
+    event.target.value = '';
   }
 };
 
 onMounted(() => {
-  loadUserData();  // Existing function to load user info
-  loadMedicalHistory();  // Fetch medical history data
+  if (!token) {
+    router.push('/');
+    return;
+  }
+
+  // 两个请求互不依赖，并行发起，减少页面等待时间。
+  loadUserData();
+  // 同一登录会话内优先使用缓存；没有缓存时才在进入页面时生成一次。
+  const cachedArchive = readCachedArchive();
+  if (cachedArchive) {
+    healthArchive.value = cachedArchive;
+  } else {
+    loadHealthArchive();
+  }
 });
 
-
-
-
-
-
+onBeforeUnmount(() => {
+  // 让仍在飞行中的档案请求结果失效，避免组件卸载后写状态。
+  archiveRequestId += 1;
+});
 </script>
 
-
 <template>
-  <div class="profile-container">
+  <div class="profile-page">
     <AppNavbar />
 
-    <div class="box">
-  
-  <div class="lishi-pel-container">
-    
-
-    <!-- 左侧：个人健康历史 -->
-    <div class="lishi">
-      <div class="history-image-container">
-    <div class="history-text">
-      你一定不知道的皮肤小知识</div>
-    <div class="text">点击进入 &nbsp;&nbsp;&nbsp;  →</div>
-  </div>
-      <el-col>
-        <div class="t">
-  <h3>个人健康历史</h3>
-  <span><ion-icon name="search-outline"></ion-icon></span>
-</div>
-        <el-card class="content-card1">
-          
-          <div v-if="medicalHistoryData.length">
-            <div v-for="(item, index) in medicalHistoryData" :key="index">
-              <el-row>
-                <el-col :span="12" class="jianyi" @click="showFullMessage(item)">
-                  <strong>病史类型:</strong> {{ truncateMessage(item.type) }}<br>
-                  <strong>用户描述:</strong> {{ truncateMessage(item.ask, 30) }}<br>
-                  <strong>置信度:</strong> {{ item.confidence }}%<br>
-                </el-col>
-                <el-col :span="12" class="jianyis" @click="showFullMessage(item)">
-                  <strong>建议:</strong> {{ truncateMessage(item.message) }}
-                </el-col>
-                <hr>
-              </el-row>
-            </div>
+    <main class="profile-main">
+      <!-- 上方：个人信息 -->
+      <section class="panel" aria-labelledby="profile-title">
+        <div class="panel-head">
+          <div>
+            <h1 id="profile-title">个人信息</h1>
+            <p>完善资料后，AI 给出的建议会更贴合你的情况。</p>
           </div>
-          <div v-else>
-            <p>没有健康历史数据可显示。</p>
-          </div>
-        </el-card>
-      </el-col>
-
-      <!-- 弹出框 -->
-      <el-dialog v-model="dialogVisible" :title="'完整健康历史'" style="z-index: 999;left: -6%;">
-        <div v-if="selectedItem">
-          <p><strong>病史类型:</strong> {{ selectedItem.type }}</p>
-          <p><strong>建议:</strong> {{ selectedItem.message }}</p>
-          <p><strong>用户描述:</strong> {{ selectedItem.ask }}</p>
-          <p><strong>图片链接:</strong> <a :href="selectedItem.url" target="_blank">查看图片</a></p>
-          <p><strong>置信度:</strong> {{ selectedItem.confidence }}%</p>
+          <span class="panel-badge">账号资料</span>
         </div>
-        <span slot="footer" class="dialog-footer">
-          <el-button @click="dialogVisible = false">关闭</el-button>
-        </span>
-      </el-dialog>
-    </div>
 
-    <!-- 右侧：个人信息填写区域 -->
-    <div class="pel">
-      <div class="profile-info">
-        <el-row type="flex" justify="start" align="middle" class="profile-details">
-          <!-- 头像显示 -->
-          <el-col  class="profile-avatar">
-            <el-avatar size="190" :src="avatarUrl" class="avatar" @click="avatarInput.click()"></el-avatar>
-            <input type="file" ref="avatarInput" @change="handleAvatarChange" style="display: none;" />
-          </el-col>
-          <el-col  class="profile-text">
-            <h2>{{ formData.account }}</h2>
-            <p>{{ formData.email }}</p>
-          </el-col>
-        </el-row>
-      </div>
-      <div class="form-container">
-  <el-row gutter="200" type="flex" justify="space-between">
-    <!-- 个人信息表单上半部分 -->
-    <el-col>
-      <el-card class="content-card">
-        <el-form :model="formData" label-width="70px">
-          <el-form-item label="账号：" >
-            <el-input v-model="formData.account" placeholder="请输入账号" :disabled="!isEditable" style="width:auto;" class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="邮箱：">
-            <el-input v-model="formData.email" placeholder="请输入邮箱" :disabled="!isEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="姓名：">
-            <el-input v-model="formData.name" placeholder="请输入姓名" :disabled="!isEditable" style="width:auto;"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="年龄：">
-            <el-input v-model="formData.age" placeholder="请输入年龄" :disabled="!isEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="性别：">
-            <el-input v-model="formData.gender" placeholder="请输入性别" :disabled="!isEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="手机号：">
-            <el-input v-model="formData.phone_number" placeholder="请输入号码" :disabled="!isEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-       
-          <el-button type="primary" @click="submitForm" :disabled="!isEditable" style="margin-left: 63px;">提交</el-button>
-          <el-button type="danger" @click="enableEdit" :disabled="isEditable">修改</el-button>
-        </el-form>
-      </el-card>
-    </el-col>
-  </el-row>
+        <div class="identity">
+          <div
+            class="avatar-wrap"
+            title="点击修改头像"
+            role="button"
+            tabindex="0"
+            @click="openAvatarPicker"
+            @keydown.enter.prevent="openAvatarPicker"
+            @keydown.space.prevent="openAvatarPicker"
+          >
+            <el-avatar :size="96" :src="avatarUrl" class="avatar" />
+            <!-- 鼠标悬停时覆盖在头像上的提示，点击事件仍由外层容器接收。 -->
+            <span class="avatar-hint">{{ isUploadingAvatar ? '上传中…' : '点击修改头像' }}</span>
+          </div>
+          <input
+            ref="avatarInput"
+            type="file"
+            accept="image/*"
+            class="avatar-input"
+            @change="handleAvatarChange"
+          />
 
-  <el-row gutter="200" type="flex" justify="space-between">
-    <!-- 个人信息表单下半部分 -->
-    <el-col>
-      <el-card class="content-cardss">
-        <el-form :model="formData" label-width="70px">
-          <el-form-item label="病史：">
-            <el-input v-model="formData.medicalHistory" placeholder="请说明情况" :disabled="!isMedicalEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item label="过敏史：">
-            <el-input v-model="formData.allergyHistory" placeholder="没有填‘无’，有则详细填写" :disabled="!isMedicalEditable" style="width:auto"class="el-form-item__label"></el-input>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="submitDiseaseInfo" :disabled="!isMedicalEditable">提交健康信息</el-button>
-            <el-button type="danger" @click="enableMedicalEdit" :disabled="isMedicalEditable">修改健康信息</el-button>
-          </el-form-item>
+          <div class="identity-text">
+            <h2>{{ displayName }}</h2>
+            <p>{{ formData.email || '暂未填写邮箱' }}</p>
+            <p class="identity-tip">点击头像即可更换</p>
+          </div>
+        </div>
+
+        <el-form :model="formData" label-position="top" class="profile-form">
+          <div class="form-grid">
+            <el-form-item label="账号">
+              <el-input v-model="formData.account" :disabled="!isEditable" placeholder="请输入账号" />
+            </el-form-item>
+            <el-form-item label="邮箱">
+              <el-input v-model="formData.email" :disabled="!isEditable" placeholder="请输入邮箱" />
+            </el-form-item>
+            <el-form-item label="姓名">
+              <el-input v-model="formData.name" :disabled="!isEditable" placeholder="请输入姓名" />
+            </el-form-item>
+            <el-form-item label="年龄">
+              <el-input v-model="formData.age" :disabled="!isEditable" placeholder="请输入年龄" />
+            </el-form-item>
+            <el-form-item label="性别">
+              <el-input v-model="formData.gender" :disabled="!isEditable" placeholder="请输入性别" />
+            </el-form-item>
+            <el-form-item label="手机号">
+              <el-input v-model="formData.phone_number" :disabled="!isEditable" placeholder="请输入手机号" />
+            </el-form-item>
+            <el-form-item label="皮肤病 / 既往病史">
+              <el-input
+                v-model="formData.medicalHistory"
+                type="textarea"
+                :rows="3"
+                :disabled="!isEditable"
+                placeholder="例如：湿疹反复 2 年，换季时加重"
+              />
+            </el-form-item>
+            <el-form-item label="过敏史">
+              <el-input
+                v-model="formData.allergyHistory"
+                type="textarea"
+                :rows="3"
+                :disabled="!isEditable"
+                placeholder="没有请填“无”；有请写明过敏原"
+              />
+            </el-form-item>
+          </div>
+
+          <div class="form-actions">
+            <el-button
+              type="primary"
+              :loading="isSubmitting"
+              :disabled="!isEditable"
+              @click="submitAll"
+            >
+              提交
+            </el-button>
+            <el-button :disabled="isEditable || isSubmitting" @click="enableEdit">
+              编辑
+            </el-button>
+          </div>
         </el-form>
-      </el-card>
-    </el-col>
-  </el-row>
-</div>
-    </div>
-  </div>
-</div>
-    <footer class="footer">
-      <div class="copyright">
-        <p>AI 皮肤医疗顾问 · AI 建议仅供参考，如有不适请及时就医</p>
-      </div>
+      </section>
+
+      <!-- 下方：AI 健康档案 -->
+      <section class="panel" aria-labelledby="archive-title">
+        <div class="panel-head archive-panel-head">
+          <div>
+            <h1 id="archive-title">AI 健康档案</h1>
+            <p>整合你填写的皮肤情况与 AI 问诊记录，形成一份持续更新的档案。</p>
+          </div>
+          <el-button text type="primary" :loading="archiveLoading" @click="loadHealthArchive">
+            重新生成
+          </el-button>
+        </div>
+
+        <div v-if="archiveLoading" class="archive-state">
+          <el-skeleton :rows="6" animated />
+          <p class="archive-state-text">AI 正在整理你的问诊记录，请稍候…</p>
+        </div>
+        <div v-else-if="archiveError" class="archive-state archive-error">
+          <p>{{ archiveError }}</p>
+          <el-button plain @click="loadHealthArchive">重试</el-button>
+        </div>
+        <article
+          v-else-if="healthArchive"
+          class="archive-body"
+          v-html="renderMarkdown(healthArchive)"
+        ></article>
+        <el-empty v-else description="暂无可整理的问诊记录或皮肤情况" :image-size="90" />
+      </section>
+    </main>
+
+    <footer class="profile-footer">
+      <p>AI 皮肤医疗顾问 · AI 建议仅供参考，如有不适请及时就医</p>
     </footer>
+
   </div>
 </template>
 
 <style scoped>
-.text{
-  position: absolute;
-  top: 60%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: white; /* 文字颜色 */
-  background-color: #12405d84;
-  width: 10vw;
-  font-size: 1.2em; /* 文字大小 */
-  font-weight: bold; /* 文字粗细 */
-  padding: 8px; /* 内边距 */
-  border-radius: 20px; /* 圆角 */
-  z-index: 10; /* 确保文字在图片上方 */
-}
-.history-image-container {
-  margin-bottom: 10px; /* 与下方标题的间距 */
-  width: 100%;
-  position: relative;
-  height: 20vh;
-  margin-top: 13vh;
-  display: flex;
-  align-items: center;
-  justify-items: center;
-}
-
-.history-icon {
-  width:100%; /* 图片宽度 */
-  height: 21vh;
-  object-fit: cover; /* 确保图片覆盖整个容器 */
-}
-.history-text {
-  position: absolute;
-  top: 30%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: white; /* 文字颜色 */
-  font-size: 2em; /* 文字大小 */
-  font-weight: bold; /* 文字粗细 */
-  padding: 10px; /* 内边距 */
-  border-radius: 5px; /* 圆角 */
-  z-index: 10; /* 确保文字在图片上方 */
-}
-.t {
-  font-size: 1.2em; 
-  margin-bottom: 5px;
-  margin-left: 10px;
-  color: aliceblue;
-  background-color: #12405daf;
-  padding: 8px;
-  border-radius: 10px;
-  width: 20vw;
-  display: flex; /* 使用 Flexbox 布局 */
-  align-items: center; /* 垂直居中对齐 */
-  justify-content: space-between; /* 两端对齐 */
-}
-
-.lishi-pel-container {
-  display: flex; /* 使用 Flexbox 布局 */
-  justify-content: space-between; /* 左右两端对齐 */
-  align-items: flex-start; /* 垂直方向顶部对齐 */
-  padding: 10px; /* 添加内边距 */
-  z-index: 1;
-}
-
-.lishi {
-  margin-right: 10px; /* 右侧间距 */
-  /* margin-top: 32vh; */
-  z-index: 999;
-  /* background-color: #4da9b74b; */
-  padding:10px;
-  align-items:center;
-  width: 70vw;
-}
-
-.pel {
-  background-color:rgba(237, 237, 235, 0.339);
-  padding: 10px;
-  width: 30vw; /* 设置宽度为 45% */
-  align-items: center;
-  justify-content: center;
-  height:auto;
-  margin-top: 12vh; /* 顶部外边距 */
-  margin-right: 0; /* 右侧外边距 */
-  margin-bottom: 0; /* 底部外边距 */
-  margin-left: 0; /* 左侧外边距 */
+.profile-page {
   display: flex;
   flex-direction: column;
-  border-radius: 50px;
-  z-index: 999;
-}
-
-.content-card1 {
-  border: none;
-  height: auto; /* 高度根据内容自动调整 */
-  overflow-y: auto;
-  margin-bottom: 10px;
-  align-items: center;
-  flex-direction: column;
-  margin-left: 10px;
-  background-color:transparent;
-  color: #fff;
-  
-}
-
-.box {
-  padding: 10px;
-
-}
-
-.footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  padding: 20px 100px;
-  /* background: linear-gradient(90deg, #4da8b7 40%, #55ceb2e4); */
-  background-color: #12405d;
-  box-shadow: 0 0 0 2px rgb(255, 255, 255); /* 添加底部白色边框效果 */
-  bottom: 0;
-}
-
-.navigation ul {
-  list-style: none;
-  display: flex;
-  gap: 20px; /* 调整链接之间的间距 */
-}
-
-.navigation ul li a {
-  color: #fff;
-  text-decoration: none;
-}
-
-.slogan {
-  color: #fff;
-  font-size: 2em;
-}
-
-.qrcode img {
-  width: 60px; /* 根据需要调整二维码大小 */
-  height: 60px;
-  margin-left: 20px;
-}
-
-.legal-links,
-.copyright {
-  color: #fff;
-  font-size: 14px;
-}
-
-.w {
-  position: fixed;
-  top: 20px; /* 根据需要调整 */
-  right: 20px; /* 根据需要调整 */
-  z-index: 1000;
-  font-size: 1.1em;
-  color: #fff;
-}
-
-.navigations {
-  display: flex;
-  align-items: flex-start; /* 左对齐 */
-  align-items: center;
-  padding: 10px;
-}
-
-.navigations .btnLogin-popups {
-  width: 130px;
-  height: 50px;
-  background: transparent;
-  border: 2px solid #fff;
-  outline: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 1.1em;
-  color: #fff;
-  font-weight: 500;
-  margin-left: 90px;
-  margin-top: 49px;
-  transition: .5s;
-  text-align: center;
-  max-height: 4vw;
-  z-index: 997;
-}
-
-.navigations .btnLogin-popups:hover {
-  background: #fff;
-  color: #162938;
-}
-
-.navigations .icon-tu {
-  position: absolute;
-  margin-right: 5vw;
-  font-size: 1.7em;
-  color: #fff;
-  line-height: 57px;
-}
-
-.language-select option {
-  color: #000;
-}
-
-header {
-  width: 100%;
-  padding: 20px 100px;
-  z-index: 1000;
-   /* background: linear-gradient(90deg, #4da8b7 40%, #55ceb2e4); */
-   background-color: #12405d;
-  display: flex;
-  justify-content: space-between;
-  max-height: 20vh;
-  height: 12vh;
-  box-shadow: 0 2px 0 0 rgb(255, 255, 255); /* 添加底部白色边框效果 */
-
-
-
-
-  
-}
-
-.language-select {
-  background-color: transparent;
-  border: 1px solid rgb(255, 255, 255);
-  border-radius: 8px;
-  color: #e8ecf0;
-  font-size: 1.1em;
-  cursor: pointer;
-  position: absolute;
-  left:420px; /* 根据需要调整 */
-  top: 50%;
-  transform: translateY(-50%);
-  outline: none;
-}
-
-.language-select::after {
-  border: 1px solid rgb(255, 255, 255);
-  color: black;
-}
-
-.jianyi {
-  background-color: #12405da8;
-  overflow-y: hidden;
-  height: 10vh;
-  cursor: pointer; /* 设置光标为可点击 */
-  border-radius: 10px 0 0 10px;
-  margin-bottom: 7px;
-  width:100%;
-  padding: 5px;
-}
-
-.jianyis {
-  background-color: #12405da8;
-  overflow-y: hidden;
-  height: 10vh;
-  cursor: pointer; /* 设置光标为可点击 */
-  border-radius:  0  10px 10px 0;
-  width:100%;
-  padding: 5px;
-}
-
-.el-dialog {
-  z-index: 9999!important; /* Ensure it's on top */
-}
-
-@media screen and (max-width: 768px) {
-  .lishi {
-    flex-direction: column; /* 在小屏幕上垂直排列 */
-  }
-  .pel, .content-card1 {
-    width: 100%; /* 在小屏幕上宽度为 100% */
-  }
-}
-
-/*1*/
-.el-input {
-  width: 20vw;
-}
-
-.profile-container {
-  width: 100%;
-  background-image: url('../assets/个人.jpg');
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
   min-height: 100vh;
-}
-
-.profile-info {
-  color: rgb(247, 243, 243);
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-}
-
-.profile-details {
-  display: flex; /* 启用 Flexbox 布局 */
-  align-items: center; /* 垂直居中对齐 */
-  justify-content: space-between; /* 两端对齐 */
-  width: 100%; /* 控制整体宽度 */
-}
-
-.profile-avatar {
-  flex: 1; /* 使头像区域占据剩余空间 */
-  justify-content: center;
-  z-index: 100;
-}
-
-.avatar {
-  border-radius: 50%; /* 头像为圆形 */
-  width: 150px; /* 强制设置头像宽度 */
-  height: 150px; /* 强制设置头像高度 */
-}
-
-.profile-text {
-  flex: 2; /* 使文本区域占据更多空间 */
-  justify-content: center;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  margin-left:25px;
-  margin-top: 25px;
-}
-
-.profile-text h2 {
-  font-size: 24px;
-  margin: 5px 0;
-}
-
-.profile-text p {
-  margin: 5px 0;
-}
-
-.form-container {
-  margin-top: 8px;
-  border: none;
-}
-
-.content-card {
-  border: none;
-  border-radius: 50px;
-  background-color: #12405d63;
-  color: #fff;
-  width:27vw;
-  max-height: 35vh;
-  overflow-y: auto;
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  margin: 0;
-  margin-bottom: 5px;
-  position: relative; /* 相对定位 */
-  z-index: 1; /* 确保卡片的 z-index 较低 */
-}
-
-.content-cardss {
-  border: none;
-  border-radius: 50px;
-  width:27vw;
-  height:20vh;
-  align-items: center;
-  display: flex;
-  justify-content: center;
-  margin: 0 auto;
-  background-color: #12405d63;
-  
-}
-
-/* 自定义滚动条样式 */
-.content-card::-webkit-scrollbar,
-.content-cardss::-webkit-scrollbar {
-  width: 10px; /* 滚动条宽度 */
- ;
-}
-
-.content-card::-webkit-scrollbar-track,
-.content-cardss::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1); /* 滚动条轨道背景色 */
-}
-
-.content-card::-webkit-scrollbar-thumb,
-.content-cardss::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.3); /* 滚动条滑块背景色 */
-  border-radius: 4px; /* 滑块圆角 */
-}
-
-.content-card::-webkit-scrollbar-thumb:hover,
-.content-cardss::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.5); /* 滑块悬停时的背景色 */
-}
-
-.content-card::-webkit-scrollbar-thumb:window-inactive,
-.content-cardss::-webkit-scrollbar-thumb:window-inactive {
-  background: rgba(0, 0, 0, 0.2); /* 滑块非活动时的背景色 */
-}
-
-.el-form-item {
-  margin-bottom: 20px;
-}
-
-.el-form-item__label {
-    align-items: flex-start;
-    box-sizing: border-box;
-    display: inline-flex;
-    flex: 0 0 auto;
-    font-size: var(--el-form-label-font-size);
-    height: 32px;
-    justify-content: flex-end;
-    line-height: 32px;
-    padding: 0 12px 0 0;
-}
-
-.el-button {
-  margin-top: 20px;
-}
-
-.icon-tu {
-  position: relative;
-  margin-left: 1vw;
-  font-size: 3em;
-  color: #fff;
-  margin-top: 30px;
-  z-index: 1000;
-  position: fixed;
-}
-/* 媒体查询以适应不同屏幕尺寸 */
-@media screen and (max-width: 1200px) {
-  .w {
-    top: 15px;
-    right: 15px;
-  }
-}
-
-@media screen and (max-width: 992px) {
-  .w {
-    top: 10px;
-    right: 10px;
-  }
-}
-
-@media screen and (max-width: 768px) {
-  .w {
-    top: 5px;
-    right: 5px;
-  }
-}
-
-@media screen and (max-width: 576px) {
-  .w {
-    top: 0;
-    right: 0;
-  }
-}
-@media screen and (max-width: 1200px) {
-  .language-select {
-    margin-left: -100px; /* 调整适合小屏幕的值 */
-  }
-}
-</style>
-
-<style scoped>
-/* =========================================================
-   个人中心：从深色背景 + 半透明卡片改为医疗健康档案布局
-   ========================================================= */
-.profile-container {
-  min-height: 100vh;
-  padding-bottom: 30px;
   background: var(--ai-mint-2);
 }
 
-.box {
-  width: min(1180px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 28px 0 18px !important;
-}
-
-.lishi-pel-container {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 0.75fr);
-  gap: 20px;
-  align-items: start !important;
-  padding: 0 !important;
-}
-
-.lishi {
-  width: auto !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-.pel {
-  width: auto !important;
-  margin: 0 !important;
-  padding: 24px !important;
-  border: 1px solid var(--ai-line);
-  border-radius: 24px !important;
-  background: #fff !important;
-  box-shadow: var(--ai-shadow-sm);
-  display: block !important;
-}
-
-.history-image-container {
-  height: 150px !important;
-  margin: 0 0 14px !important;
-  overflow: hidden;
-  border-radius: 20px;
-  background: linear-gradient(135deg, var(--ai-primary-deep), var(--ai-primary));
-}
-
-.history-icon {
-  width: 100% !important;
-  height: 150px !important;
-  object-fit: cover;
-  opacity: 0.55;
-}
-
-.history-text {
-  top: 36% !important;
-  font-size: clamp(16px, 2vw, 22px) !important;
-  font-weight: 700;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
-}
-
-.text {
-  top: auto !important;
-  bottom: 16px;
-  left: 18px !important;
-  transform: none !important;
-  width: auto !important;
-  padding: 7px 12px !important;
-  border-radius: 99px !important;
-  background: rgba(255, 255, 255, 0.18) !important;
-  backdrop-filter: blur(10px);
-  color: #fff !important;
-  font-size: 12px !important;
-  font-weight: 600 !important;
-}
-
-.t {
-  width: 100% !important;
-  margin: 0 0 12px !important;
-  padding: 12px 15px !important;
-  border: 1px solid var(--ai-line);
-  border-radius: 14px !important;
-  background: #fff !important;
-  color: var(--ai-ink) !important;
-  font-size: 15px !important;
-  font-weight: 700;
-  box-shadow: var(--ai-shadow-sm);
-}
-
-.t ion-icon {
-  color: var(--ai-primary);
-}
-
-.content-card1 {
-  margin: 0 !important;
-  padding: 0 !important;
-  background: transparent !important;
-  color: var(--ai-ink) !important;
-}
-
-.content-card1 :deep(.el-card__body) {
-  padding: 18px !important;
-}
-
-.content-card1 .el-row {
-  display: block;
-}
-
-.jianyi,
-.jianyis {
-  width: 100% !important;
-  height: auto !important;
-  min-height: 76px;
-  margin-bottom: 8px !important;
-  padding: 11px 12px !important;
-  border-radius: 12px !important;
-  background: #f7fbfa !important;
-  color: var(--ai-ink-soft) !important;
-  font-size: 12px;
-  line-height: 1.7;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.jianyi:hover,
-.jianyis:hover {
-  background: var(--ai-primary-soft) !important;
-}
-
-.jianyi strong,
-.jianyis strong {
-  color: var(--ai-ink);
-}
-
-hr {
-  margin: 6px 0;
-  border: 0;
-  border-top: 1px solid var(--ai-line);
-}
-
-.profile-info {
-  justify-content: flex-start !important;
-  color: var(--ai-ink) !important;
-  margin-bottom: 16px;
-}
-
-.profile-details {
-  justify-content: flex-start !important;
-  gap: 16px;
-}
-
-.profile-avatar {
-  flex: 0 0 auto !important;
+.profile-main {
+  flex: 1;
   display: flex;
-  justify-content: flex-start !important;
+  flex-direction: column;
+  gap: 22px;
+  width: min(1080px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 28px 0 10px;
+}
+
+.panel {
+  padding: 26px 28px;
+  border: 1px solid var(--ai-line);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: var(--ai-shadow-sm);
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.panel-head h1 {
+  margin: 0 0 6px;
+  color: var(--ai-ink);
+  font-size: 22px;
+}
+
+.panel-head p {
+  margin: 0;
+  color: var(--ai-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.panel-badge {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border-radius: 99px;
+  background: var(--ai-primary-soft);
+  color: var(--ai-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 20px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed var(--ai-line);
+}
+
+.avatar-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  cursor: pointer;
+  outline: none;
+}
+
+.avatar-wrap:focus-visible {
+  box-shadow: 0 0 0 4px var(--ai-primary-soft);
 }
 
 .avatar {
-  width: 96px !important;
-  height: 96px !important;
-  border: 4px solid #fff;
+  display: block;
+  width: 96px;
+  height: 96px;
+  border: 3px solid #fff;
   background: var(--ai-primary-soft);
-  box-shadow: var(--ai-shadow);
-  cursor: pointer;
+  box-shadow: var(--ai-shadow-sm);
 }
 
-.profile-text {
-  flex: 1 !important;
-  margin: 0 0 0 4px !important;
+.avatar-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 50%;
+  background: rgba(11, 69, 87, 0.72);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
 }
 
-.profile-text h2 {
-  margin: 0 0 4px !important;
-  color: var(--ai-ink) !important;
-  font-size: 22px !important;
+.avatar-wrap:hover .avatar-hint,
+.avatar-wrap:focus-visible .avatar-hint {
+  opacity: 1;
 }
 
-.profile-text p {
-  margin: 0 !important;
-  color: var(--ai-muted) !important;
+.avatar-input {
+  display: none;
+}
+
+.identity-text h2 {
+  margin: 0 0 4px;
+  color: var(--ai-ink);
+  font-size: 20px;
+}
+
+.identity-text p {
+  margin: 0;
+  color: var(--ai-muted);
   font-size: 13px;
   word-break: break-all;
 }
 
-.form-container {
-  margin-top: 8px !important;
-}
-
-.content-card,
-.content-cardss {
-  width: 100% !important;
-  height: auto !important;
-  max-height: none !important;
-  margin: 0 0 12px !important;
-  padding: 0 !important;
-  border: 1px solid var(--ai-line) !important;
-  border-radius: 18px !important;
-  background: #fff !important;
-  color: var(--ai-ink) !important;
-  display: block !important;
-  box-shadow: var(--ai-shadow-sm);
-}
-
-.content-card :deep(.el-card__body),
-.content-cardss :deep(.el-card__body) {
-  padding: 16px !important;
-}
-
-.content-card .el-form-item__label,
-.content-cardss .el-form-item__label {
-  color: var(--ai-ink-soft) !important;
-  font-weight: 600;
-}
-
-.content-card :deep(.el-input),
-.content-cardss :deep(.el-input) {
-  width: 100% !important;
-}
-
-.content-card :deep(.el-input__wrapper),
-.content-cardss :deep(.el-input__wrapper) {
-  width: 100% !important;
-}
-
-.el-button {
-  margin-top: 8px !important;
-}
-
-.footer {
-  width: min(1180px, calc(100% - 40px)) !important;
-  margin: 18px auto 0 !important;
-  padding: 18px 0 !important;
-  border-top: 1px solid var(--ai-line) !important;
-  border-bottom: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--ai-muted) !important;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.footer .navigation a,
-.footer .navigation ul li a {
-  color: var(--ai-ink-soft) !important;
+.identity-text .identity-tip {
+  margin-top: 6px;
+  color: var(--ai-primary);
   font-size: 12px;
 }
 
-.footer .slogan {
-  color: var(--ai-ink-soft) !important;
-  font-size: 13px !important;
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+
+.profile-form :deep(.el-form-item__label) {
+  color: var(--ai-ink-soft);
   font-weight: 600;
 }
 
-.footer .copyright,
-.footer .legal-links {
-  color: var(--ai-muted) !important;
-  font-size: 11px !important;
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
 }
 
-.qrcode img {
-  width: 44px !important;
-  height: 44px !important;
-  margin-left: 10px !important;
-  border-radius: 6px;
+.form-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
-@media (max-width: 960px) {
-  .lishi-pel-container {
+/* 禁用态按钮仍保持主题色，显式降低透明度，避免看起来可以点击。 */
+.form-actions :deep(.el-button.is-disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.archive-body {
+  color: var(--ai-ink-soft);
+  font-size: 14px;
+  line-height: 1.8;
+  word-break: break-word;
+}
+
+.archive-body :deep(h1),
+.archive-body :deep(h2),
+.archive-body :deep(h3) {
+  margin: 18px 0 8px;
+  color: var(--ai-ink);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.archive-body :deep(h1:first-child),
+.archive-body :deep(h2:first-child),
+.archive-body :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.archive-body :deep(p) {
+  margin: 8px 0;
+}
+
+.archive-body :deep(ul),
+.archive-body :deep(ol) {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.archive-body :deep(li) {
+  margin: 4px 0;
+}
+
+.archive-body :deep(strong) {
+  color: var(--ai-ink);
+}
+
+.archive-body :deep(blockquote) {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--ai-primary);
+  border-radius: 0 10px 10px 0;
+  background: #fff;
+}
+
+.archive-state {
+  padding: 8px 0;
+}
+
+.archive-state-text {
+  margin: 12px 0 0;
+  color: var(--ai-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.archive-error p {
+  margin: 0 0 12px;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.profile-footer {
+  width: min(1080px, calc(100% - 40px));
+  margin: 16px auto 0;
+  padding: 18px 0 24px;
+  border-top: 1px solid var(--ai-line);
+}
+
+.profile-footer p {
+  margin: 0;
+  color: var(--ai-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .profile-main {
+    width: calc(100% - 24px);
+    gap: 16px;
+    padding-top: 16px;
+  }
+
+  .panel {
+    padding: 20px 16px;
+    border-radius: 18px;
+  }
+
+  .panel-head {
+    flex-direction: column;
+  }
+
+  .panel-badge {
+    align-self: flex-start;
+  }
+
+  .form-grid {
     grid-template-columns: 1fr;
   }
 
-  .box {
-    padding-top: 22px !important;
-  }
-}
-
-@media (max-width: 640px) {
-  .box {
+  .profile-footer {
     width: calc(100% - 24px);
-    padding-top: 18px !important;
-  }
-
-  .pel {
-    padding: 18px !important;
-  }
-
-  .footer {
-    width: calc(100% - 24px) !important;
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .history-image-container {
-    height: 120px !important;
-  }
-
-  .history-icon {
-    height: 120px !important;
   }
 }
 </style>
-

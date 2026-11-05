@@ -228,9 +228,11 @@ export default {
             );
             if (String(this.activeChatId) === String(chatId)) {
               this.activeChatId = null;
-              this.$emit('chat-deleted', chatId);
               // 不再补建空对话；下一条消息发送时会按需创建新对话。
             }
+            // 无论删的是不是当前对话都通知聊天页：
+            // 被删除的对话如果还有后台回答，需要立刻停掉，避免继续写入。
+            this.$emit('chat-deleted', chatId);
             // 删除成功后以后端列表为准刷新，确认该对话已不在库中
             await this.fetchHistory();
           } else {
@@ -287,6 +289,11 @@ export default {
       }
 
       // 头部正在编辑的对话就是当前对话，同时保持侧栏选中态
+      this.activeChatId = chatId;
+    },
+
+    // 供父组件在自动恢复上次对话后同步侧栏选中态
+    setActiveChat(chatId) {
       this.activeChatId = chatId;
     },
 

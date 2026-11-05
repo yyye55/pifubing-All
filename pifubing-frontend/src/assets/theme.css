@@ -130,9 +130,9 @@ header,
 .top,
 .container5 > header {
   height: auto !important;
-  min-height: 74px;
+  min-height: 60px;
   max-height: none !important;
-  padding: 12px clamp(20px, 5vw, 72px) !important;
+  padding: 8px clamp(20px, 5vw, 72px) !important;
   display: flex !important;
   align-items: center !important;
   gap: 14px !important;
@@ -142,9 +142,9 @@ header,
 header img.logo1,
 .top img.logo1,
 .logo1 {
-  height: 42px !important;
+  height: 34px !important;
   width: auto !important;
-  max-height: 42px !important;
+  max-height: 34px !important;
   margin: 0 !important;
   object-fit: contain;
 }

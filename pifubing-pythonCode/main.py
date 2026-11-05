@@ -8,6 +8,7 @@ import zipfile
 import os
 import re
 import logging
+import uuid
 import uvicorn
 from dotenv import load_dotenv
 
@@ -326,15 +327,105 @@ def generate_hot_questions(max_items=4):
         return []
 
 
+# 个人中心“AI 健康档案”的系统提示词。
+# 只允许模型归纳已有信息，明确禁止编造诊断、药物剂量和治疗承诺。
+HEALTH_ARCHIVE_SYSTEM_PROMPT = (
+    "你是一名皮肤科健康档案助理，负责把用户填写的个人皮肤情况和历史 AI 问诊记录，"
+    "整理成一份详实、可长期跟踪的个人皮肤健康档案。\n"
+    "请使用 Markdown，按下面的结构输出；没有信息的小节写“暂无相关记录”，但不要省略小节：\n"
+    "## 一、档案概览\n"
+    "用 3-5 句话概括用户的基本情况、目前最主要的皮肤困扰，以及本档案的数据来源"
+    "（个人自述和最近若干条问诊记录），并写明个人资料中提供的建档日期，让用户一眼看懂档案重点。\n"
+    "## 二、基本情况\n"
+    "列出姓名、年龄、性别、建档日期等基础信息；如果年龄能推断所处阶段（如青少年、成年、中年），"
+    "可简要说明该阶段皮肤护理需要关注的重点。\n"
+    "## 三、皮肤问题梳理\n"
+    "只列用户实际出现过的症状或皮损，每条尽量写清：问题或表现、出现部位、持续时间或发作频次、"
+    "可能的诱因、目前采用的处理方式。多条记录指向同一问题时合并归纳，并注明“多次提及”，"
+    "体现问题的反复情况；预防、护肤、用药等科普类咨询不算皮肤问题，放到问诊记录摘要中。\n"
+    "## 四、症状特点与诱因分析\n"
+    "结合记录归纳症状的共同特点（如瘙痒、红斑、脱屑、干燥、渗出、色素改变等）"
+    "以及可能的加重或缓解因素。明确区分“用户自述”与“AI 既往建议”，"
+    "不确定的内容用“可能与……有关”表述，不下确定性诊断。\n"
+    "## 五、过敏史与注意事项\n"
+    "列出已知过敏原、药物过敏和食物过敏，并说明需要避免的接触物、护肤品成分或生活习惯。\n"
+    "## 六、日常护理建议\n"
+    "按清洁、保湿、防晒、衣物、居住环境、作息与饮食分组，结合用户的具体情况给出可执行的做法"
+    "（例如洗澡水温与时长、保湿频率、防晒方式、衣物材质），不要只写通用套话。\n"
+    "## 七、复发预警信号\n"
+    "列出需要留意或应及时复诊的表现，例如皮损范围明显扩大、渗液、持续疼痛、伴发热等。\n"
+    "## 八、随访与就医建议\n"
+    "给出复诊时机、建议就诊科室，以及就诊前可以准备的资料；提醒 AI 建议不能替代线下诊断。\n"
+    "## 九、问诊记录摘要\n"
+    "用列表按主题概括最近问诊的关键内容，每条标注对应的皮肤问题和 AI 的主要建议，"
+    "便于用户回顾。\n"
+    "## 十、数据说明与免责声明\n"
+    "说明本档案由 AI 根据用户填写信息和历史问诊自动整理，可能存在遗漏，仅供健康管理参考。\n"
+    "写作约束：\n"
+    "1. 只依据给出的信息整理，不得编造没有出现的症状、诊断、药物、检查结果或就诊经历；\n"
+    "2. 不给出具体药物剂量、处方或治疗承诺，涉及用药时只写“遵医嘱使用”；\n"
+    "3. 内容要具体、贴合用户描述，避免模板化套话，总长度控制在 800-1200 字；\n"
+    "4. 只输出档案正文，不要输出解释、前言或代码块。"
+)
+
+
+def generate_health_archive(profile, history):
+    """根据个人皮肤情况和问诊记录生成健康档案。
+
+    profile 为用户填写的姓名、年龄、性别、病史、过敏史等；
+    history 为最近若干条问诊的问答摘要。
+    任何失败都返回空字符串，由 Go 层向前端返回友好错误。
+    """
+    profile = (profile or "").strip()
+    history = (history or "").strip()
+    if not profile and not history:
+        return ""
+
+    try:
+        chat = ChatOpenAI(
+            api_key=CONFIG["api_key"],
+            base_url=CONFIG["base_url"],
+            model=CONFIG["model_name"],
+            streaming=False,
+            # 档案扩充到 800-1200 字后需要更多输出额度，避免正文被截断。
+            max_tokens=2500,
+            # 汇总多条问诊比单个回答需要更多时间，但也不能无限等待。
+            timeout=75,
+        )
+        messages = [
+            SystemMessage(content=HEALTH_ARCHIVE_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"个人皮肤情况：\n{profile or '暂无'}\n\n"
+                    # 限制输入长度，避免历史记录很多时请求体过大、模型耗时过长。
+                    # 记录按时间先后拼接，保留末尾内容即保留最近的问诊。
+                    f"历史问诊记录：\n{history[-6000:] or '暂无'}"
+                )
+            ),
+        ]
+        response = chat.invoke(messages)
+        raw = response.content if isinstance(response.content, str) else str(response.content)
+        raw = raw.strip()
+
+        # 兼容模型偶尔返回 ```markdown 代码块的情况。
+        raw = re.sub(r"^```(?:markdown)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+        return raw.strip()
+    except Exception as e:
+        logging.warning(f"生成健康档案失败: {e}")
+        return ""
+
+
 def handle_file_upload(image: UploadFile):
     """把上传的图片或压缩包保存到临时目录，返回图片路径列表。"""
     image_paths = []
     temp_dir = None
     try:
-        if image.filename.endswith('.zip'):
-            temp_dir = Path.cwd() / "temp_files"
-            temp_dir.mkdir(parents=True, exist_ok=True)
+        # 每次请求使用独立临时目录，避免并发请求互相污染，也避免旧图片被重复收集。
+        temp_dir = Path.cwd() / "temp_files" / uuid.uuid4().hex
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
+        if image.filename.endswith('.zip'):
             # 保存并解压ZIP文件
             zip_path = temp_dir / image.filename
             with zip_path.open("wb") as buffer:
@@ -343,17 +434,12 @@ def handle_file_upload(image: UploadFile):
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
 
-            # 删除临时文件夹中的压缩文件
-            for file in temp_dir.rglob('*.zip'):
-                file.unlink()
-
-            # 收集图片路径
-            image_paths = [str(p) for p in temp_dir.rglob('*') if p.is_file()]
-            zip_path.unlink()
+            # 收集图片路径，压缩包本身不参与预测
+            image_paths = [
+                str(p) for p in temp_dir.rglob('*')
+                if p.is_file() and p.suffix.lower() != '.zip'
+            ]
         else:
-            temp_dir = Path.cwd() / "temp_images"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-
             file_path = temp_dir / image.filename
             with file_path.open("wb") as buffer:
                 shutil.copyfileobj(image.file, buffer)
@@ -673,6 +759,19 @@ def generate_hot_questions_endpoint(count: int = 4):
     # 后端一次会请求一整池（默认 8 个），上限放宽到 20。
     count = max(1, min(count, 20))
     return {"questions": generate_hot_questions(count)}
+
+
+@app.post("/generate_health_archive")
+def generate_health_archive_endpoint(
+        profile: str = Form(""),
+        history: str = Form("")
+):
+    """供 Go 后端生成个人中心的 AI 健康档案。
+
+    失败时 archive 为空字符串，Go 层会返回“生成失败”的提示。
+    用普通 def，让 FastAPI 把阻塞的大模型调用放到线程池执行。
+    """
+    return {"archive": generate_health_archive(profile, history)}
 
 
 if __name__ == "__main__":
