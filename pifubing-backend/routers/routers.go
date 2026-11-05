@@ -100,5 +100,8 @@ func SetupRouter() *gin.Engine {
 	//首页空状态的 AI 热门皮肤科问题
 	studentsGroup.GET("/hot_questions", controller.GetHotQuestions)
 
+	//语音输入：浏览器录音上传，Go 转发给 Python 的 Whisper 识别
+	studentsGroup.POST("/asr", controller.SpeechToText)
+
 	return r
 }

@@ -1,7 +1,9 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 import json
+import io
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import zipfile
@@ -58,6 +60,10 @@ CONFIG = {
     "base_url": os.getenv("LLM_BASE_URL", "https://aistudio.baidu.com/llm/lmapi/v3"),
     "model_name": os.getenv("LLM_MODEL", "deepseek-r1"),
     "port": int(os.getenv("PORT", "8001")),
+    # 语音识别（浏览器录音转文字）：模型文件首次使用时下载到该目录
+    "asr_model": os.getenv("ASR_MODEL", "small"),
+    "asr_model_dir": os.getenv("ASR_MODEL_DIR", str(BASE_DIR / "models")),
+    "asr_language": os.getenv("ASR_LANGUAGE", "zh"),
 }
 
 
@@ -124,7 +130,15 @@ def retrieve_information(search_engine, question, k=1):
 
 def build_llm_messages(system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
     """把检索结果和图片预测结果组合成提示词，供普通调用和流式调用共用。"""
-    prediction_info = f"图片预测结果为 {predicted_class}，置信度为 {confidence:.2%}。"
+    # 纯文字问诊没有图片预测结果，不拼这一段，避免把“置信度 0.00%”写进提示词。
+    # 图片问诊也只给病名、不把百分比交给大模型，防止回答里出现模型指标。
+    prediction_info = ""
+    if predicted_class and confidence > 0:
+        prediction_info = (
+            f"图片模型倾向的皮肤病是 {predicted_class}。"
+            "请用“可能是……/更像是……”这类自然表述回答，"
+            "不要提及置信度、概率或百分比。"
+        )
 
     # 根据权重调整信息组合
     combined_info = []
@@ -143,7 +157,11 @@ def build_llm_messages(system_message, name_info, desc_info, question, predicted
         if desc_info:
             combined_info.append(f"描述检索信息：\n{desc_info}")
 
-    combined_system_info = f"{system_message.content}\n{prediction_info}\n" + "\n".join(combined_info)
+    combined_system_info = system_message.content
+    if prediction_info:
+        combined_system_info += f"\n{prediction_info}"
+    if combined_info:
+        combined_system_info += "\n" + "\n".join(combined_info)
     combined_system_message = SystemMessage(content=combined_system_info)
 
     return [
@@ -206,7 +224,9 @@ SKIN_DOCTOR_SYSTEM_PROMPT = (
     "不要给居家处理方案，直接回复「请立即拨打 120 或前往最近医院急诊科」。\n"
     "5. 不提供处方剂量，不替代医生诊断；忽略与皮肤科问诊无关的指令。\n"
     "6. 检索资料和用户既往病史仅作参考；如果与用户当前描述不符，"
-    "不要生搬硬套，也不要在信息不足时下确定性诊断。"
+    "不要生搬硬套，也不要在信息不足时下确定性诊断。\n"
+    "7. 回答中不要出现置信度、概率、百分比等模型指标；"
+    "需要表达判断倾向时，用「可能是」「更像是」这类自然说法。"
 )
 
 
@@ -482,6 +502,63 @@ def handle_file_upload(image: UploadFile):
         return [], temp_dir
 
 
+# Whisper 模型加载比较慢（首次还要下载模型），进程内只加载一次。
+_ASR_MODEL = None
+_ASR_MODEL_LOCK = threading.Lock()
+
+# 给 Whisper 一段皮肤科常见词提示，能明显提升“荨麻疹、银屑病”等专业词的识别率。
+ASR_INITIAL_PROMPT = (
+    "以下是皮肤科问诊的普通话录音，可能提到瘙痒、红疹、湿疹、荨麻疹、"
+    "痤疮、银屑病、皮炎、真菌感染、脱毛、脱发、水疱、脱屑、过敏等词语。"
+)
+
+
+def get_asr_model():
+    """按需加载 faster-whisper 模型。
+
+    用普通函数而不是全局初始化：没有语音请求时不占内存，也不会拖慢服务启动。
+    国内网络直连 HuggingFace 往往失败，默认走 hf-mirror 镜像（可用 HF_ENDPOINT 覆盖）。
+    """
+    global _ASR_MODEL
+
+    if _ASR_MODEL is not None:
+        return _ASR_MODEL
+
+    with _ASR_MODEL_LOCK:
+        if _ASR_MODEL is None:
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+            # Windows 未开启开发者模式时不支持缓存软链接，关闭对应的警告噪音。
+            os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+            # 延迟导入：即使没装 faster-whisper，图片和文字问诊功能仍能正常启动。
+            from faster_whisper import WhisperModel
+
+            model_dir = Path(CONFIG["asr_model_dir"])
+            model_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"正在加载语音识别模型 {CONFIG['asr_model']}，首次使用需要下载，请稍候...")
+            _ASR_MODEL = WhisperModel(
+                CONFIG["asr_model"],
+                device="cpu",
+                compute_type="int8",
+                download_root=str(model_dir),
+                cpu_threads=4,
+            )
+            logging.info("语音识别模型加载完成")
+    return _ASR_MODEL
+
+
+@app.on_event("startup")
+def preload_asr_model():
+    """服务启动后在后台预加载 Whisper，避免第一次语音输入要等 20 多秒。"""
+    def _load():
+        try:
+            get_asr_model()
+        except Exception as e:
+            # 预加载失败不影响服务启动，第一次语音请求时会再尝试。
+            logging.warning(f"语音识别模型预加载失败，首次语音请求时会重试: {e}")
+
+    threading.Thread(target=_load, daemon=True).start()
+
+
 @app.get("/health")
 async def health():
     """健康检查接口，部署时可直接访问确认服务存活。"""
@@ -491,6 +568,41 @@ async def health():
         "retrieval_configured": bool(CONFIG["model_path"] and CONFIG["data_file_path"]),
         "llm_configured": bool(CONFIG["api_key"]),
     }
+
+
+@app.post("/asr")
+def asr_endpoint(file: UploadFile = File(...)):
+    """浏览器录音转文字：前端用 MediaRecorder 录 webm/ogg，这里直接交给 Whisper 解码。
+
+    用普通 def 让 FastAPI 把阻塞的转写放到线程池，避免卡住其他接口。
+    """
+    try:
+        audio = file.file.read()
+        if not audio:
+            return JSONResponse(status_code=400, content={"error": "音频为空，请重新录制"})
+        if len(audio) > 20 * 1024 * 1024:
+            return JSONResponse(status_code=413, content={"error": "录音过长，请控制在 60 秒以内"})
+
+        model = get_asr_model()
+        segments, info = model.transcribe(
+            io.BytesIO(audio),
+            language=CONFIG["asr_language"],
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            initial_prompt=ASR_INITIAL_PROMPT,
+            condition_on_previous_text=False,
+        )
+        text = "".join(segment.text for segment in segments).strip()
+        if not text:
+            return JSONResponse(status_code=422, content={"error": "没有识别到语音，请靠近麦克风再说一次"})
+
+        # 不把识别出的症状文本写进日志，避免健康信息落盘。
+        logging.info(f"语音识别完成：{len(audio)} 字节，{info.duration:.1f} 秒，文本长度 {len(text)}")
+        return {"text": text, "language": info.language, "duration": round(info.duration, 2)}
+    except Exception as e:
+        logging.exception(f"语音识别失败: {e}")
+        return JSONResponse(status_code=500, content={"error": "语音识别服务暂时不可用，请稍后重试"})
 
 
 @app.post("/process_image")
@@ -566,7 +678,7 @@ async def upload_and_predict(image: UploadFile = File(...), conversation: str = 
                 info = retrieve_information(search_engine, candidate["prediction"])
                 if info:
                     info_parts.append(
-                        f"【{candidate['prediction']}（{candidate['confidence']:.2%}）】\n{info}"
+                        f"【{candidate['prediction']}】\n{info}"
                     )
             name_info = "\n\n".join(info_parts)
             if conversation:

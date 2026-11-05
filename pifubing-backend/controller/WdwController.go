@@ -2763,7 +2763,7 @@ func PredictImage(c *gin.Context) {
 	if confidence < 20 {
 		c.JSON(http.StatusOK, gin.H{
 			"code":  201,
-			"error": "Confidence 小于 20，预测结果不可靠"})
+			"error": "模型对该图片的判断把握不大，预测结果不可靠"})
 		return
 	}
 
@@ -2860,12 +2860,13 @@ func PredictText(c *gin.Context) {
 	history, _ := models.Rdb.LRange(ctx, conversationKey, -2, -1).Result()
 	historyText := strings.Join(history, "\n")
 	fmt.Println(historyText)
-	// 把 top-3 候选一起交给大模型，避免只盯着 top-1 一个病名。
+	// 把候选病名一起交给大模型，避免只盯着 top-1 一个病名。
+	// 这里只传病名、不传概率，避免模型把百分比原样复述给用户。
 	candidateText := "无"
 	if len(input.Candidates) > 0 {
 		parts := make([]string, 0, len(input.Candidates))
 		for _, candidate := range input.Candidates {
-			parts = append(parts, fmt.Sprintf("%s（%.2f%%）", candidate.Prediction, candidate.Confidence))
+			parts = append(parts, candidate.Prediction)
 		}
 		candidateText = strings.Join(parts, "、")
 	}
@@ -2875,16 +2876,16 @@ func PredictText(c *gin.Context) {
 		structureText = "无"
 	}
 	fullConversation := fmt.Sprintf(
-		"\n模型检索: 用户的皮肤病图片经过模型分类后，得到预测结果【%s】和预测置信度【%.2f%%】。\n"+
-			"模型候选结果（按概率从高到低）: %s\n"+
+		"\n模型检索: 用户的皮肤病图片经过模型分类后，模型倾向的皮肤病是【%s】。\n"+
+			"模型候选结果（按可能性从高到低）: %s\n"+
 			"图像结构观察（仅形态描述，不含诊断）: %s\n"+
 			"通过知识库检索，获取到以下信息:\n"+
 			"🔹 预测结果检索内容: %s\n"+
 			"🔹 用户描述检索内容: %s\n"+
 			"🔹 结果与描述的检索权重占比: %s\n"+
+			"回答要求：用“可能是……/更像是……”这类自然表述说明皮肤病倾向；不要提及置信度、概率、百分比等模型指标。\n"+
 			"结合用户描述:\n%s",
 		input.Prediction,
-		input.Confidence,
 		candidateText,
 		structureText,
 		input.ResultSearch,
@@ -2894,18 +2895,28 @@ func PredictText(c *gin.Context) {
 	)
 
 	// 图片问诊的预测信息也登记下来，刷新后气泡上方的预测结果和结构描述可以恢复。
-	metaText := fmt.Sprintf("预测结果：%s，置信度：%.2f%%", input.Prediction, input.Confidence)
-	if len(input.Candidates) > 0 {
-		candidateParts := make([]string, 0, 3)
-		for i, candidate := range input.Candidates {
-			if i >= 3 {
-				break
-			}
-			candidateParts = append(candidateParts, fmt.Sprintf("%s %.2f%%", candidate.Prediction, candidate.Confidence))
+	// 和前端保持一致：只展示“可能是某个病名”，不展示置信度百分比。
+	metaPrediction := strings.TrimSpace(input.Prediction)
+	if metaPrediction == "" {
+		metaPrediction = "暂时无法判断"
+	}
+	metaText := "可能是：" + metaPrediction
+	candidateParts := make([]string, 0, 2)
+	for _, candidate := range input.Candidates {
+		// 只把概率达到 10% 的其他候选作为“也可能是”的补充，最多两个。
+		if len(candidateParts) >= 2 {
+			break
 		}
-		if len(candidateParts) > 0 {
-			metaText += "；候选：" + strings.Join(candidateParts, "、")
+		if candidate.Prediction == input.Prediction || candidate.Confidence < 10 {
+			continue
 		}
+		candidateParts = append(candidateParts, candidate.Prediction)
+	}
+	if len(candidateParts) > 0 {
+		metaText += "；也可能是：" + strings.Join(candidateParts, "、")
+	}
+	if input.Confidence < 80 {
+		metaText += "；模型把握不大，仅供参考"
 	}
 	live := newLiveStream(
 		input.Chat_id,
@@ -3173,4 +3184,101 @@ func PredictOnlyTextStream(c *gin.Context) {
 		c.SSEvent("done", gin.H{"ok": true})
 		c.Writer.Flush()
 	}
+}
+
+// SpeechToText 接收浏览器录音并转发给 Python 语音识别服务。
+// 前端以 multipart/form-data 的 file 字段提交 webm/ogg 音频；
+// Python 服务地址用 AI_ASR_API_URL 配置，默认本机 8001 端口。
+func SpeechToText(c *gin.Context) {
+	if _, err := ValidateToken(c); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "error": err.Error()})
+		return
+	}
+
+	// 限制请求体大小，避免异常大文件把内存和 Python 服务拖垮。
+	const maxAudioBytes = 20 << 20
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAudioBytes)
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": 413, "error": "录音过长，请控制在 60 秒以内"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "error": "未收到音频文件"})
+		return
+	}
+	if fileHeader.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "error": "音频为空，请重新录制"})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "读取音频失败"})
+		return
+	}
+	defer file.Close()
+
+	// 重新组装 multipart，把浏览器上传的音频原样转给 Python 服务。
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filepath.Base(fileHeader.Filename))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "处理音频失败"})
+		return
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "读取音频失败"})
+		return
+	}
+	if err := writer.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "处理音频失败"})
+		return
+	}
+
+	apiURL := getEnvOrDefault("AI_ASR_API_URL", "http://127.0.0.1:8001/asr")
+	req, err := http.NewRequest("POST", apiURL, &body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "error": "创建语音识别请求失败"})
+		return
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// 首次请求可能要加载/下载 Whisper 模型，超时给足 300 秒。
+	client := &http.Client{Timeout: 300 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("语音识别服务请求失败: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "error": "语音识别服务不可用，请确认 Python 服务已启动"})
+		return
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "error": "读取语音识别结果失败"})
+		return
+	}
+
+	var result struct {
+		Text  string `json:"text"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		log.Printf("语音识别响应解析失败: %v, 内容: %s", err, string(responseBody))
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "error": "语音识别服务返回异常"})
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK || result.Text == "" {
+		message := strings.TrimSpace(result.Error)
+		if message == "" {
+			message = "没有识别到语音，请靠近麦克风再说一次"
+		}
+		c.JSON(resp.StatusCode, gin.H{"code": resp.StatusCode, "error": message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "text": result.Text, "message": "识别成功"})
 }

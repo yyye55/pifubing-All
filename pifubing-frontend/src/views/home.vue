@@ -59,6 +59,10 @@ export default {
       ],
       // 页面卸载后，迟到的热门问题响应不再写回组件，避免无意义的状态更新
       isUnmounted: false,
+      // 语音输入：正在申请麦克风 / 录音中 / 正在等待服务端识别
+      voiceStarting: false,
+      voiceRecording: false,
+      voiceTranscribing: false,
     };
   },
 
@@ -519,33 +523,249 @@ export default {
       localStorage.setItem('isPaused', JSON.stringify(false));
     },
 
+    // 语音输入：点击开始录音，再点一次结束；静音 3 秒或录满 60 秒也会自动结束。
+    // 识别在 Python 服务端完成（Whisper），不依赖 Chrome 的在线语音服务。
     startVoiceSearch() {
-      if (!('webkitSpeechRecognition' in window)) {
-        alert('您的浏览器不支持语音识别功能，请使用 Chrome 浏览器。');
+      // 申请麦克风权限期间忽略重复点击，避免同时创建多个录音器
+      if (this.voiceStarting || this.voiceTranscribing) return;
+      if (this.voiceRecording) {
+        this.stopVoiceRecording();
+        return;
+      }
+      this.beginVoiceRecording();
+    },
+
+    async beginVoiceRecording() {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        ElMessage.error('当前浏览器不支持录音，请使用 Chrome 或 Edge 浏览器');
         return;
       }
 
-      const recognition = new webkitSpeechRecognition();
-      recognition.lang = 'zh-CN'; // 设置语言为中文
-      recognition.interimResults = false; // 是否获取实时结果
-      recognition.continuous = false; // 是否连续识别
-      recognition.start();
-      recognition.onresult = (event) => {
-        const speechResult = event.results[0][0].transcript;
-        this.userMessage = speechResult; // 将识别结果存储到 userMessage 中
-        const editableContent = this.$refs.editableContent;
-        if (editableContent) {
-          editableContent.textContent = speechResult;
-          editableContent.focus();
+      this.voiceStarting = true;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        // 等待授权期间用户可能已经离开页面，直接关掉麦克风，不再开始录音。
+        if (this.isUnmounted) {
+          stream.getTracks().forEach((track) => track.stop());
+          this.voiceStarting = false;
+          return;
         }
-      };
-      recognition.onerror = (event) => {
-        console.error('语音识别错误:', event.error);
-        alert('语音识别出错，请重试！');
-      };
-      recognition.onend = () => {
-        console.log('语音识别已结束');
-      };
+        // 先保存流，后面任何一步失败都要在 catch 里关掉，避免麦克风一直被占用。
+        this.voiceStreamRef = stream;
+
+        // 不同浏览器支持的录音格式不同：Chrome/Edge 用 webm，Safari 用 mp4。
+        const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+        const mimeType = candidates.find(
+          (type) => window.MediaRecorder?.isTypeSupported?.(type)
+        );
+        let recorder;
+        try {
+          recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        } catch (err) {
+          recorder = new MediaRecorder(stream);
+        }
+
+        this.voiceChunksBuffer = [];
+        this.voiceRecorderRef = recorder;
+        this.voiceStartedAt = Date.now();
+        recorder.ondataavailable = (event) => {
+          if (event.data && event.data.size) this.voiceChunksBuffer.push(event.data);
+        };
+        recorder.onstop = () => this.handleVoiceStopped();
+        recorder.start(250);
+
+        this.voiceRecording = true;
+        this.voiceStarting = false;
+        this.startVoiceSilenceWatch(stream);
+        // 上限 60 秒，避免用户忘记结束导致文件过大
+        this.voiceMaxTimer = setTimeout(() => this.stopVoiceRecording(), 60000);
+      } catch (error) {
+        console.error('打开麦克风失败:', error);
+        this.voiceStarting = false;
+        this.releaseVoiceResources();
+        const name = error?.name || '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          ElMessage.error('未获得麦克风权限，请在地址栏允许使用麦克风后重试');
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+          ElMessage.error('没有检测到可用的麦克风');
+        } else if (name === 'NotReadableError') {
+          ElMessage.error('麦克风被其他程序占用，请关闭后重试');
+        } else {
+          ElMessage.error('无法打开麦克风，请检查设备后重试');
+        }
+      }
+    },
+
+    // 用音量判断是否已经说完：持续静音 3 秒自动结束录音。
+    startVoiceSilenceWatch(stream) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+
+        const ctx = new AudioContext();
+        // 某些浏览器里新建的音频上下文是挂起状态，不恢复的话音量永远是 0，会误判为静音。
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.fftSize);
+        this.voiceAudioContextRef = ctx;
+        let silentSince = 0;
+
+        this.voiceSilenceTimer = setInterval(() => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) {
+            const value = (data[i] - 128) / 128;
+            sum += value * value;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          const elapsed = Date.now() - this.voiceStartedAt;
+
+          if (rms < 0.015) {
+            if (!silentSince) silentSince = Date.now();
+            else if (elapsed > 1200 && Date.now() - silentSince > 3000) {
+              this.stopVoiceRecording();
+            }
+          } else {
+            silentSince = 0;
+          }
+        }, 120);
+      } catch (error) {
+        console.warn('静音检测启动失败，改为手动结束录音:', error);
+      }
+    },
+
+    stopVoiceRecording() {
+      if (!this.voiceRecording) return;
+      this.voiceRecording = false;
+      clearTimeout(this.voiceMaxTimer);
+      clearInterval(this.voiceSilenceTimer);
+
+      try {
+        if (this.voiceRecorderRef && this.voiceRecorderRef.state !== 'inactive') {
+          this.voiceRecorderRef.stop();
+        }
+      } catch (error) {
+        console.warn('结束录音失败:', error);
+        this.releaseVoiceResources();
+      }
+    },
+
+    // 录音结束后上传到 Go 后端，由 Python 的 Whisper 转成文字。
+    async handleVoiceStopped() {
+      this.releaseVoiceResources();
+      const chunks = this.voiceChunksBuffer || [];
+      this.voiceChunksBuffer = [];
+
+      if (!chunks.length) {
+        ElMessage.warning('没有录到声音，请重试');
+        return;
+      }
+
+      const blob = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
+      if (blob.size < 1200) {
+        ElMessage.warning('没有录到有效声音，请靠近麦克风多说几个字再试');
+        return;
+      }
+
+      const token = localStorage.getItem('token');
+      if (!token) {
+        ElMessage.warning('登录状态已失效，请重新登录');
+        return;
+      }
+
+      const form = new FormData();
+      const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
+      form.append('file', blob, `voice.${ext}`);
+
+      this.voiceTranscribing = true;
+      try {
+        const response = await axios.post('/users/asr', form, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 180000,
+        });
+        const text = String(response.data?.text || '').trim();
+        if (!text) {
+          ElMessage.warning(response.data?.error || '没有识别到语音，请再说一次');
+          return;
+        }
+        if (this.isUnmounted) return;
+        this.fillVoiceResult(text);
+      } catch (error) {
+        console.error('语音识别失败:', error);
+        ElMessage.error(
+          error?.response?.data?.error ||
+            '语音识别失败，请确认 Python 语音服务已启动后重试'
+        );
+      } finally {
+        this.voiceTranscribing = false;
+      }
+    },
+
+    // 把识别结果填入输入框；已有文字时用逗号接在后面，不覆盖用户输入。
+    fillVoiceResult(text) {
+      const box = this.$refs.editableContent || document.querySelector('.textarea-wen');
+      const current = (box?.innerText || '').replace(/​| /g, '').trim();
+      let next = text;
+      if (current) {
+        const separator = /[，。！？,.!?]$/.test(current) ? '' : '，';
+        next = `${current}${separator}${text}`;
+      }
+
+      this.userMessage = next;
+      if (box) {
+        box.textContent = next;
+        box.focus();
+        // 把光标放到末尾，方便继续输入或直接发送
+        const range = document.createRange();
+        range.selectNodeContents(box);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    },
+
+    // 释放录音相关的流、定时器和音频上下文，避免麦克风指示灯一直亮着。
+    releaseVoiceResources() {
+      clearTimeout(this.voiceMaxTimer);
+      clearInterval(this.voiceSilenceTimer);
+      this.voiceSilenceTimer = null;
+      this.voiceMaxTimer = null;
+
+      try {
+        this.voiceStreamRef?.getTracks().forEach((track) => track.stop());
+      } catch (error) {
+        console.warn('释放麦克风失败:', error);
+      }
+      try {
+        this.voiceAudioContextRef?.close();
+      } catch (error) {
+        console.warn('关闭音频上下文失败:', error);
+      }
+      this.voiceStreamRef = null;
+      this.voiceAudioContextRef = null;
+      this.voiceRecorderRef = null;
+    },
+
+    // 离开页面时立即停止录音，不再上传半截音频。
+    cancelVoiceRecording() {
+      if (!this.voiceRecorderRef && !this.voiceRecording) return;
+      this.voiceRecording = false;
+      if (this.voiceRecorderRef) this.voiceRecorderRef.onstop = null;
+      try {
+        if (this.voiceRecorderRef && this.voiceRecorderRef.state !== 'inactive') {
+          this.voiceRecorderRef.stop();
+        }
+      } catch (error) {
+        console.warn('取消录音失败:', error);
+      }
+      this.voiceChunksBuffer = [];
+      this.releaseVoiceResources();
     },
 
     // 处理图片选择，支持一次选择多张
@@ -676,19 +896,20 @@ export default {
         const confidenceNumber = Number(confidence);
         const lowConfidence = Number.isFinite(confidenceNumber) && confidenceNumber < 80;
         const candidateList = Array.isArray(candidates) ? candidates.filter((item) => item?.prediction) : [];
-        // 展示 top-3 候选，让用户知道模型并非“只认一个病名”；
-        // 置信度后端已经换算成百分比，这里只做两位小数格式化。
-        const candidateText = candidateList
-          .slice(0, 3)
-          .map((item) => {
-            const value = Number(item.confidence);
-            return `${item.prediction} ${Number.isFinite(value) ? value.toFixed(2) : '-'}%`;
-          })
-          .join('、');
+        // 不向用户展示置信度百分比，只保留“可能是某个病名”的自然表述。
+        // 其他候选只有概率达到 10% 时才列出，避免把 0.x% 的噪声也当成备选建议。
+        const alternativeNames = candidateList
+          .filter((item) => item.prediction !== prediction)
+          .slice(0, 2)
+          .filter((item) => Number(item.confidence) >= 10)
+          .map((item) => item.prediction);
+        const alternativeText = alternativeNames.length
+          ? `；也可能是：${alternativeNames.join('、')}`
+          : '';
         aiMessage.meta =
-          `预测结果：${prediction ?? '未知'}，置信度：${confidence ?? '-'}%` +
-          (candidateText ? `；候选：${candidateText}` : '') +
-          (lowConfidence ? '（置信度较低，结果仅供参考）' : '');
+          `可能是：${prediction || '暂时无法判断'}` +
+          alternativeText +
+          (lowConfidence ? '；模型把握不大，仅供参考' : '');
         // 视觉模型只描述形态，单独展示，避免和“预测结果”混在一起。
         aiMessage.structure = structure_summary || '';
 
@@ -723,7 +944,7 @@ export default {
 
       if (response.data?.code === 201) {
         await ElMessageBox.alert(
-          `亲，由于图片的预测置信度较低，这边给您几个小建议哦。\n\n` +
+          `亲，模型对这张照片的判断把握不大，这边给您几个小建议哦。\n\n` +
             `1 重新拍摄患处的照片，确保清晰可见，以便更准确地分析情况。\n` +
             `2 最好去线下找专业医生看看，他们经验丰富，能给出更靠谱的诊断。\n` +
             `3 您可以补充一些症状的详细描述，这样我们可以更好地帮助您分析哦！`,
@@ -1564,6 +1785,8 @@ export default {
   beforeUnmount() {
     // 标记已卸载，阻止仍在途中的热门问题请求回写组件状态
     this.isUnmounted = true;
+    // 离开页面时停止录音并释放麦克风
+    this.cancelVoiceRecording();
     // 离开页面时释放未发送图片的缩略图地址
     this.releaseSelectedImages();
     this.imageViewerVisible = false;
@@ -1793,9 +2016,21 @@ export default {
 
                 <div class="composer-toolbar">
                   <div class="composer-tools">
-                    <button type="button" class="tool-btn" title="语音输入" @click="startVoiceSearch">
-                      <ion-icon name="mic-outline"></ion-icon>
+                    <button
+                      type="button"
+                      class="tool-btn"
+                      :class="{
+                        'tool-btn--recording': voiceRecording,
+                        'tool-btn--busy': voiceTranscribing
+                      }"
+                      :title="voiceTranscribing ? '正在识别语音...' : voiceRecording ? '点击结束录音' : '语音输入'"
+                      :disabled="voiceTranscribing"
+                      @click="startVoiceSearch"
+                    >
+                      <ion-icon :name="voiceTranscribing ? 'sync-outline' : voiceRecording ? 'stop-circle-outline' : 'mic-outline'"></ion-icon>
                     </button>
+                    <span v-if="voiceRecording" class="voice-status">正在听，再点结束</span>
+
 
                     <!-- 文件图标暂不使用，后续需要时再打开 -->
                     <!--
@@ -2134,7 +2369,7 @@ min-height: 100vh;
   max-width: 100%;
   padding-top: 1vh;
 
-  
+
 }
 
 
@@ -3258,6 +3493,46 @@ input[type="submit"]:hover {
 
 .tool-btn--accent {
   color: var(--ai-primary);
+}
+
+/* 语音输入：录音中红色提示，识别中显示旋转图标 */
+.tool-btn--recording,
+.tool-btn--recording:hover {
+  color: #d94b4b;
+  background: rgba(217, 75, 75, 0.12);
+}
+
+.tool-btn:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.tool-btn--busy ion-icon {
+  animation: voice-spin 1s linear infinite;
+}
+
+.voice-status {
+  margin-left: 2px;
+  color: #d94b4b;
+  font-size: 12px;
+  white-space: nowrap;
+  animation: voice-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes voice-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 
