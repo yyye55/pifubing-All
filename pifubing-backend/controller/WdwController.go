@@ -2650,6 +2650,8 @@ func PredictImage(c *gin.Context) {
 	}
 
 	if len(files) > 0 {
+		// 容器或全新环境首次运行时 ./temp 可能不存在，先确保父目录存在再建临时目录。
+		_ = os.MkdirAll("./temp", 0o755)
 		tempDir, dirErr := os.MkdirTemp("./temp", "predict-")
 		if dirErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 100, "error": fmt.Sprintf("创建临时目录失败: %v", dirErr)})
