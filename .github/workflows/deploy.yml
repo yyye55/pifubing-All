@@ -1,0 +1,58 @@
+# 把本文件放到仓库的 .github/workflows/deploy.yml，push 到 main 即自动部署。
+# 需要在仓库 Settings -> Secrets and variables -> Actions 里配置：
+#   DEPLOY_SSH_KEY  服务器部署私钥（服务器上 cat ~/.ssh/pifubing_deploy 的内容，整段粘贴）
+#   DEPLOY_HOST     服务器公网 IP，例如 43.142.39.16
+#   DEPLOY_USER     SSH 用户名，例如 ubuntu
+# 可选（Settings -> Variables）：
+#   SITE_URL        站点地址，用于运行摘要展示，例如 http://43.142.39.16
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # 支持在 Actions 页面手动触发
+
+# 同一条流水线串行执行，避免两次推送同时改服务器
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 准备 SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 在服务器上执行部署
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 \
+            -i ~/.ssh/id_ed25519 \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "cd ~/pifubing-deploy && ./deploy.sh update --ref ${{ github.sha }}" \
+            2>&1 | tee deploy.log
+
+      - name: 写入运行摘要
+        if: always()
+        run: |
+          {
+            echo "## 部署结果：${{ job.status }}"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 提交 | \`${{ github.sha }}\` |"
+            echo "| 分支 | \`${{ github.ref_name }}\` |"
+            echo "| 触发者 | @${{ github.actor }} |"
+            echo "| 站点 | ${{ vars.SITE_URL }} |"
+            echo ""
+            echo '```'
+            tail -n 25 deploy.log 2>/dev/null || echo "没有拿到日志"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
