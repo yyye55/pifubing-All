@@ -2863,19 +2863,29 @@ func PredictText(c *gin.Context) {
 	historyText := strings.Join(history, "\n")
 	fmt.Println(historyText)
 	// 把候选病名一起交给大模型，避免只盯着 top-1 一个病名。
-	// 这里只传病名、不传概率，避免模型把百分比原样复述给用户。
+	// 只传概率达到 10% 的病名、不传概率，既避免复述百分比，也避免把 8% 之类的弱候选当成建议。
 	candidateText := "无"
 	if len(input.Candidates) > 0 {
 		parts := make([]string, 0, len(input.Candidates))
 		for _, candidate := range input.Candidates {
+			if candidate.Confidence < 10 {
+				continue
+			}
 			parts = append(parts, candidate.Prediction)
 		}
-		candidateText = strings.Join(parts, "、")
+		if len(parts) > 0 {
+			candidateText = strings.Join(parts, "、")
+		}
 	}
 	// 视觉模型只提供形态描述；为空时明确写“无”，避免提示词出现空行歧义。
 	structureText := strings.TrimSpace(input.StructureSummary)
 	if structureText == "" {
 		structureText = "无"
+	}
+	// 不把百分比交给大模型，只用一句“把握不大”让它保留必要的谨慎表述。
+	confidenceHint := ""
+	if input.Confidence < 80 {
+		confidenceHint = "模型对这张照片把握不大，第一句请写成“从照片看，可能是XX，但不太确定”，并建议就医确认。\n"
 	}
 	fullConversation := fmt.Sprintf(
 		"\n模型检索: 用户的皮肤病图片经过模型分类后，模型倾向的皮肤病是【%s】。\n"+
@@ -2885,7 +2895,11 @@ func PredictText(c *gin.Context) {
 			"🔹 预测结果检索内容: %s\n"+
 			"🔹 用户描述检索内容: %s\n"+
 			"🔹 结果与描述的检索权重占比: %s\n"+
-			"回答要求：用“可能是……/更像是……”这类自然表述说明皮肤病倾向；不要提及置信度、概率、百分比等模型指标。\n"+
+			"回答要求：第一句话必须直接给出判断，格式为“从照片看，可能是XX”，"+
+			"如果还有其他可能，紧接着补一句“也可能是YY”；"+
+			"不要用“根据您提供的信息”“感谢您的信任”之类的开场白；"+
+			"不要提及置信度、概率、百分比等模型指标。\n"+
+			"%s"+
 			"结合用户描述:\n%s",
 		input.Prediction,
 		candidateText,
@@ -2893,6 +2907,7 @@ func PredictText(c *gin.Context) {
 		input.ResultSearch,
 		input.DescSearch,
 		input.Weight,
+		confidenceHint,
 		input.Conversation,
 	)
 
@@ -2902,7 +2917,7 @@ func PredictText(c *gin.Context) {
 	if metaPrediction == "" {
 		metaPrediction = "暂时无法判断"
 	}
-	metaText := "可能是：" + metaPrediction
+	metaText := "从照片看，可能是：" + metaPrediction
 	candidateParts := make([]string, 0, 2)
 	for _, candidate := range input.Candidates {
 		// 只把概率达到 10% 的其他候选作为“也可能是”的补充，最多两个。

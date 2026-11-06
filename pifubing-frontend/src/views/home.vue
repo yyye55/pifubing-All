@@ -907,7 +907,7 @@ export default {
           ? `；也可能是：${alternativeNames.join('、')}`
           : '';
         aiMessage.meta =
-          `可能是：${prediction || '暂时无法判断'}` +
+          `从照片看，可能是：${prediction || '暂时无法判断'}` +
           alternativeText +
           (lowConfidence ? '；模型把握不大，仅供参考' : '');
         // 视觉模型只描述形态，单独展示，避免和“预测结果”混在一起。

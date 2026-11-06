@@ -136,9 +136,16 @@ def build_llm_messages(system_message, name_info, desc_info, question, predicted
     if predicted_class and confidence > 0:
         prediction_info = (
             f"图片模型倾向的皮肤病是 {predicted_class}。"
-            "请用“可能是……/更像是……”这类自然表述回答，"
+            "回答的第一句话必须直接给出判断，格式为“从照片看，可能是XX”，"
+            "如果还有其他可能，紧接着补一句“也可能是YY”；"
+            "不要用“根据您提供的信息”“感谢您的信任”之类的开场白；"
             "不要提及置信度、概率或百分比。"
         )
+        if confidence < 80:
+            prediction_info += (
+                "模型对这张照片把握不大，第一句请写成“从照片看，可能是XX，但不太确定”，"
+                "并建议就医确认。"
+            )
 
     # 根据权重调整信息组合
     combined_info = []

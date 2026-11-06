@@ -730,6 +730,12 @@ header .btnLogin-popups {
   font-size: 18px;
 }
 
+/* 隐藏浏览器自带的密码可见性按钮（Edge/IE），只保留页面内自定义的小眼睛 */
+.auth-card input[type="password"]::-ms-reveal,
+.auth-card input[type="password"]::-ms-clear {
+  display: none;
+}
+
 .auth-card .btn,
 .auth-card button[type="submit"] {
   width: 100%;
