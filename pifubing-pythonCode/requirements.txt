@@ -24,5 +24,10 @@ transformers==4.46.3
 langchain==0.3.7
 langchain-openai==0.2.8
 
+# AI 长期记忆（本地 qdrant 文件模式，不需要额外启动向量库服务）
+# mem0ai 2.2.1 要求 protobuf<7，安装时可能把已有的 protobuf 7.x 降到 6.x。
+mem0ai==2.2.1
+qdrant-client==1.20.0
+
 # 语音识别（浏览器录音转文字，CPU 推理）
 faster-whisper==1.0.3
