@@ -57,8 +57,8 @@ CONFIG = {
     "data_file_path": os.getenv("DATA_FILE_PATH", ""),
     # 大模型配置
     "api_key": os.getenv("LLM_API_KEY", ""),
-    "base_url": os.getenv("LLM_BASE_URL", "https://aistudio.baidu.com/llm/lmapi/v3"),
-    "model_name": os.getenv("LLM_MODEL", "deepseek-r1"),
+    "base_url": os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+    "model_name": os.getenv("LLM_MODEL", "glm-4-flash"),
     "port": int(os.getenv("PORT", "8001")),
     # 语音识别（浏览器录音转文字）：模型文件首次使用时下载到该目录
     "asr_model": os.getenv("ASR_MODEL", "small"),
