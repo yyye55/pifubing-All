@@ -673,6 +673,10 @@ func CallLargeModelAPIForText(conversation ConversationData) (string, error) {
 	if err := writer.WriteField("confidence", fmt.Sprintf("%f", conversation.Confidence)); err != nil {
 		return "", fmt.Errorf("写入置信度失败: %v", err)
 	}
+	// 历史上下文单独提交，Python 只把它放进 system prompt，不用于知识库检索。
+	if err := writer.WriteField("memory_context", conversation.MemoryContext); err != nil {
+		return "", fmt.Errorf("写入历史上下文失败: %v", err)
+	}
 
 	// 结束 multipart 数据写入
 	if err := writer.Close(); err != nil {
@@ -757,6 +761,9 @@ type ConversationData struct {
 	Conversation   string  `json:"conversation"`
 	PredictedClass string  `json:"predicted_class"`
 	Confidence     float64 `json:"confidence"`
+	// MemoryContext 是同一对话最近问答 + 用户长期记忆，仅供大模型参考。
+	// 它不参与 Python 的 FAISS 检索，避免历史内容把知识库检索带偏。
+	MemoryContext string `json:"memory_context"`
 }
 
 // ModelResponse 结构体定义
@@ -2839,6 +2846,73 @@ type AskData struct {
 	Model            string                `json:"model"`
 }
 
+// truncateRunes 按字符截断，避免把中文从中间截成乱码。
+func truncateRunes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max]) + "…"
+}
+
+// buildMemoryContext 汇总两层记忆，交给大模型参考：
+//  1. 短期：同一 chat_id 最近几轮问答，直接从只读查询 image_ask_messages 得到；
+//  2. 长期：mem0 保存的用户自述事实，按当前问题语义检索。
+//
+// 任何一步失败都只返回已有部分，绝不让记忆功能拖垮正常问诊。
+func buildMemoryContext(ctx context.Context, userID, chatID int, question string, limit int) string {
+	if userID <= 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+
+	// 短期记忆：回答过的问题才会出现在表里，当前这一问尚未保存，不会重复。
+	if chatID > 0 {
+		rows, err := models.Check_recent_chat_history(dao.DB, userID, chatID, limit)
+		if err != nil {
+			log.Printf("读取最近对话失败（用户 %d，对话 %d）: %v", userID, chatID, err)
+		} else if len(rows) > 0 {
+			var builder strings.Builder
+			builder.WriteString("【最近对话】同一对话最近几轮（仅用于理解上下文，不要复述）：\n")
+			turns := 0
+			for _, row := range rows {
+				ask := truncateRunes(strings.TrimSpace(row.Ask), 120)
+				answer := truncateRunes(strings.TrimSpace(row.Message), 240)
+				if ask == "" || answer == "" {
+					continue
+				}
+				builder.WriteString("用户：" + ask + "\n助手：" + answer + "\n")
+				turns++
+			}
+			if turns > 0 {
+				parts = append(parts, builder.String())
+			}
+		}
+	}
+
+	// 长期记忆：检索失败时 SearchMemories 返回 nil，这里自然跳过。
+	question = strings.TrimSpace(question)
+	if question != "" {
+		memories := utils.SearchMemories(ctx, userID, question)
+		if len(memories) > 0 {
+			var builder strings.Builder
+			builder.WriteString("【长期记忆】用户过去主动提到的信息（仅相关时参考，不要逐条复述）：\n")
+			for _, memory := range memories {
+				memory = truncateRunes(strings.TrimSpace(memory), 120)
+				if memory != "" {
+					builder.WriteString("- " + memory + "\n")
+				}
+			}
+			parts = append(parts, builder.String())
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
 func PredictText(c *gin.Context) {
 	base64Data := c.Query("data")
 	if base64Data == "" {
@@ -2859,9 +2933,13 @@ func PredictText(c *gin.Context) {
 	}
 
 	conversationKey := fmt.Sprintf("conversation:%d", input.User_id)
-	history, _ := models.Rdb.LRange(ctx, conversationKey, -2, -1).Result()
-	historyText := strings.Join(history, "\n")
-	fmt.Println(historyText)
+	// 图片问诊的历史不再从 Redis 取（原来读了只打印、没有用），
+	// 统一改由 buildMemoryContext 读取同对话最近问答 + mem0 长期记忆。
+	memoryContext := buildMemoryContext(c.Request.Context(), input.User_id, input.Chat_id, input.Conversation, 6)
+	memoryBlock := ""
+	if memoryContext != "" {
+		memoryBlock = memoryContext + "\n"
+	}
 	// 把候选病名一起交给大模型，避免只盯着 top-1 一个病名。
 	// 只传概率达到 10% 的病名、不传概率，既避免复述百分比，也避免把 8% 之类的弱候选当成建议。
 	candidateText := "无"
@@ -2895,10 +2973,19 @@ func PredictText(c *gin.Context) {
 			"🔹 预测结果检索内容: %s\n"+
 			"🔹 用户描述检索内容: %s\n"+
 			"🔹 结果与描述的检索权重占比: %s\n"+
-			"回答要求：第一句话必须直接给出判断，格式为“从照片看，可能是XX”，"+
+			"回答要求：本次是图片问诊，第一句话必须逐字以“从照片看，可能是”开头，"+
+			"不能写成“从描述看”“根据图片看”“看起来”等变体，也不要加任何开场白；"+
+			"这条规则优先于“信息不足时先说无法判断”的风格要求，即使信息不足也必须先给出图片判断；"+
 			"如果还有其他可能，紧接着补一句“也可能是YY”；"+
 			"不要用“根据您提供的信息”“感谢您的信任”之类的开场白；"+
-			"不要提及置信度、概率、百分比等模型指标。\n"+
+			"不要提及置信度、概率、百分比等模型指标。"+
+			"回答风格：先给倾向性判断，再简要说明依据，然后分点给出护理建议和就医时机；"+
+			"语气专业、克制，统一使用“您”；信息不足时先追问，不要把推测写成确诊；"+
+			"不给处方药剂量，普通回答结尾写“以上仅供参考，不能替代面诊，具体请遵医嘱。”"+
+			"下面是同一对话的最近问答和用户过去主动说过的信息，属于已知用户档案："+
+			"如果与当前问题相关必须使用，必要时用“您之前提到……”自然说明；"+
+			"如果档案里明确写有过敏原且当前问题涉及用药，回答必须点名该过敏原，不能只写笼统的“注意过敏史”。\n"+
+			"%s"+
 			"%s"+
 			"结合用户描述:\n%s",
 		input.Prediction,
@@ -2908,6 +2995,7 @@ func PredictText(c *gin.Context) {
 		input.DescSearch,
 		input.Weight,
 		confidenceHint,
+		memoryBlock,
 		input.Conversation,
 	)
 
@@ -2990,6 +3078,9 @@ func PredictText(c *gin.Context) {
 		Confidence: fmt.Sprintf("%.2f", input.Confidence),
 	}
 	saveImageMessageAsync(&saveResponse)
+	// 回答已经完整生成后，再异步从用户原话里抽取长期记忆。
+	// 不传 AI 回答，避免把模型判断当成用户事实；失败只记日志。
+	utils.AddMemoryAsync(input.User_id, input.Chat_id, input.Conversation, "image")
 
 	// 回答结束后生成追问，事件流结束前下发给前端渲染成可点击的问题。
 	// 用后台上下文：刷新页面会导致请求上下文取消，但追问仍应生成并写进登记表。
@@ -3053,9 +3144,12 @@ func PredictOnlyText(c *gin.Context) {
 	fullConversation := "Q: " + conversation
 	fullConversation += "\n我的患病史: " + user.Medical_history
 	fullConversation += "\n过敏情况: " + user.Allergies
+	// 短期记忆按 chat_id 取最近几轮，长期记忆按当前问题语义检索。
+	memoryContext := buildMemoryContext(c.Request.Context(), userID, chatID, conversation, 6)
 
 	modelResponse, err := CallLargeModelAPIForText(ConversationData{
-		Conversation: fullConversation,
+		Conversation:  fullConversation,
+		MemoryContext: memoryContext,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -3080,6 +3174,8 @@ func PredictOnlyText(c *gin.Context) {
 		Message:    responseForText.GeneratedText,
 		Confidence: fmt.Sprintf("%.2f", responseForText.Confidence),
 	})
+	// 只把用户原话交给 mem0 做事实抽取，回答内容不写进长期记忆。
+	utils.AddMemoryAsync(userID, chatID, conversation, "text")
 
 	conversationKey := fmt.Sprintf("conversation:%d", userID)
 	currentMessage := fmt.Sprintf("Q: %s\nA: %s", conversation, responseForText.GeneratedText)
@@ -3125,6 +3221,8 @@ func PredictOnlyTextStream(c *gin.Context) {
 	fullConversation := "Q: " + conversation
 	fullConversation += "\n我的患病史: " + user.Medical_history
 	fullConversation += "\n过敏情况: " + user.Allergies
+	// 历史上下文单独传给 Python，不拼进 conversation，避免污染知识库检索。
+	memoryContext := buildMemoryContext(c.Request.Context(), userID, chatID, conversation, 6)
 
 	// 开始生成前登记这条回答。浏览器刷新后前端会丢掉内存状态，
 	// 但这里仍会持续接收并保存增量，刷新后的页面可通过状态接口接回来。
@@ -3156,7 +3254,7 @@ func PredictOnlyTextStream(c *gin.Context) {
 		return true
 	}
 
-	fullText, streamErr := utils.CallTextStream(streamCtx, fullConversation, emit)
+	fullText, streamErr := utils.CallTextStream(streamCtx, fullConversation, memoryContext, emit)
 	if streamErr != nil {
 		log.Printf("文字流式回答失败: %v", streamErr)
 		live.finish("error", "AI 服务暂时不可用，请稍后再试", nil)
@@ -3186,6 +3284,8 @@ func PredictOnlyTextStream(c *gin.Context) {
 		Message:    fullText,
 		Confidence: "0.00",
 	})
+	// 流式回答完整落库后再异步写长期记忆，不阻塞 SSE 的收尾事件。
+	utils.AddMemoryAsync(userID, chatID, conversation, "text")
 
 	conversationKey := fmt.Sprintf("conversation:%d", userID)
 	currentMessage := fmt.Sprintf("Q: %s\nA: %s", conversation, fullText)

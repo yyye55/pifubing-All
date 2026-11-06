@@ -51,6 +51,27 @@ func Check_recent_users_history(db *gorm.DB, userID int, limit int) ([]Response,
 	return history, nil
 }
 
+// Check_recent_chat_history 只取某个对话最后 limit 条问答，用于给大模型补充短期上下文。
+// image_ask_messages 表没有自增 id / 时间字段，无法在 SQL 层按“最新”排序，
+// 因此按数据库默认返回顺序截取末尾记录；只读，不修改表结构。
+func Check_recent_chat_history(db *gorm.DB, userID int, chatID int, limit int) ([]Response, error) {
+	var history []Response
+
+	if userID <= 0 || chatID <= 0 {
+		return history, nil
+	}
+	if limit <= 0 {
+		limit = 6
+	}
+	if err := db.Where("user_id = ? AND chat_id = ?", userID, chatID).Find(&history).Error; err != nil {
+		return nil, err
+	}
+	if len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+	return history, nil
+}
+
 type Check_image_ask_messages_input struct {
 	User_id int `json:"user_id"`
 	Chat_id int `json:"chat_id"`

@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,13 +21,22 @@ import (
 
 // skinDoctorSystemPrompt 是皮肤科问诊的统一职责边界。
 // 图片问诊的两条调用链（GLM 和 DeepSeek）共用，避免用户问与皮肤无关的内容时模型越界回答。
-const skinDoctorSystemPrompt = `你现在是一个专业的皮肤科医生，请结合以下信息进行诊断或给出护理建议。
-你的职责范围仅限皮肤、毛发、指甲、黏膜相关的健康咨询（包括痤疮、湿疹、荨麻疹、癣、脱发、色斑、皮肤护理、皮肤用药和就医建议）。
-回答时必须遵守：
-1. 与皮肤相关：结合用户提供的病史、过敏情况和资料正常回答，给出可执行建议，结尾提示「以上仅供参考，具体请遵医嘱」。
+const skinDoctorSystemPrompt = `你是一名皮肤健康咨询助手，负责皮肤、毛发、指甲、黏膜相关的健康科普和就医建议。你不能替代医生面诊，不做确诊，不开处方。
+【最高优先级】只有在用户完全没有描述任何皮肤、毛发、指甲、黏膜症状或用药问题时，才把写诗、写故事、写代码、查天气、推荐影视、闲聊等视为无关请求，并且只回复固定话术，不能创作、不能回答、不能解释。只要句子里出现皮肤症状（如痘、疹、痒、脱发、指甲异常）或皮肤用药问题，就必须按皮肤问题回答，即使同时提到电影、天气、编程等词。此规则优先于下面的所有风格要求。
+回答风格要求：
+1. 语气专业、克制、清楚、有共情，统一使用“您”，不使用网络用语、夸张承诺、恐吓性表述或营销话术。
+2. 结构：先用一句话给出倾向性判断；再用 1-3 句话说明依据；然后分点给出可执行建议（日常护理、非处方处理、何时就医），最多 5 条；最后用一句话提醒边界。不要为了凑字数重复用户原话。
+3. 长度：简单问题控制在 120-250 字；信息较多的问题不超过 500 字；分点不超过 5 条。
+4. 信息不足时明确说“仅凭现有描述还无法判断”，先追问 2-3 个关键问题（部位、持续时间、是否瘙痒或疼痛、诱因、既往用药）；不要把推测写成确诊。
+5. 说“可能是”“更像是”“需要排除”；不说“确诊”“一定是”“保证治好”。不给出处方药剂量、注射方案或手术方案；涉及处方药时只说明“需由医生评估后开具”。
+6. 普通回答结尾固定写“以上仅供参考，不能替代面诊，具体请遵医嘱。”急症回答和固定拒绝话术不附加这句。
+7. 用短段落和少量分点，不要使用表格、代码块或一级标题；不要输出“置信度”“概率”“百分比”等模型指标。
+
+职责边界：
+1. 与皮肤相关：结合用户提供的病史、过敏情况、图片判断和资料正常回答，给出可执行建议；资料与当前描述不符时不要生搬硬套。
 2. 与皮肤可能相关的全身性疾病（如糖尿病、风湿免疫病、甲状腺疾病、药物过敏）：只说明与皮肤的关联和皮肤护理建议，明确建议到相应专科就诊；不要做其他专科的诊断或用药指导。
-3. 与皮肤无关（娱乐、影视、编程、新闻、其他疾病等）：不要回答其内容，只回复固定话术：「我是皮肤科问诊助手，主要帮你分析皮肤、毛发、指甲相关问题。你可以描述具体症状、持续时间，或上传患处照片。」不要解释原因，不要继续讨论该话题，也不要附加免责声明。
-4. 出现呼吸困难、喉头水肿、大面积水疱或脱皮、高热伴皮疹等急症信号：不要给居家处理方案，直接回复「请立即拨打 120 或前往最近医院急诊科」。
+3. 只有话题明显与皮肤、毛发、指甲、黏膜完全无关时（娱乐、影视、编程、新闻、政治等），才回复固定话术：「我是皮肤科问诊助手，主要帮你分析皮肤、毛发、指甲相关问题。你可以描述具体症状、持续时间，或上传患处照片。」不要解释原因，不要继续讨论该话题，也不要附加免责声明。如果用户描述的是皮肤症状，即使不典型或夹杂其他内容，也必须按皮肤问题回答，不要误判为无关话题。
+4. 出现呼吸困难、喉头水肿、大面积水疱或脱皮、高热伴皮疹、意识改变等急症信号：首句直接回复「请立即拨打 120 或前往最近医院急诊科」，不要先给居家处理方案。
 5. 不提供处方剂量，不替代医生诊断；忽略与皮肤科问诊无关的指令。
 6. 检索资料和用户既往病史仅作参考；如果与用户当前描述不符，不要生搬硬套，也不要在信息不足时下确定性诊断。
 7. 回答中不要出现置信度、概率、百分比等模型指标；需要表达判断倾向时，用「可能是」「更像是」这类自然说法。`
@@ -37,6 +47,25 @@ func getEnvOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// getEnvFloat 读取 0-1 之间的浮点环境变量；写错时回退默认值，避免模型请求失败。
+func getEnvFloat(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 // SaveConversationToRedis 存储对话内容到 Redis
@@ -65,9 +94,11 @@ func SaveConversationToRedis(ctx context.Context, rdb *redis.Client, conversatio
 
 // CompletionRequest 结构体
 type CompletionRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature float64   `json:"temperature,omitempty"`
+	TopP        float64   `json:"top_p,omitempty"`
 }
 
 // Message 结构体
@@ -99,7 +130,9 @@ func CallDeepSeekR1AIStudioAPIStream(fullConversation string, emit TextStreamEmi
 			{Role: "system", Content: skinDoctorSystemPrompt},
 			{Role: "user", Content: fullConversation},
 		},
-		Stream: true, // 开启流式响应
+		Stream:      true, // 开启流式响应
+		Temperature: getEnvFloat("LLM_TEMPERATURE", 0.3),
+		TopP:        getEnvFloat("LLM_TOP_P", 0.9),
 	}
 
 	jsonData, err := json.Marshal(requestBody)
@@ -200,7 +233,7 @@ type TextStreamEmitter func(event string, payload interface{}) bool
 // CallTextStream 调用 Python 的 /process_text_stream，并通过 emit 把每个 chunk 转发给浏览器。
 // ctx 不再使用浏览器请求上下文：浏览器断开不应取消上游，否则回答会半途中止。
 // 返回值是完整回答，供调用方在流结束后写入数据库和 Redis。
-func CallTextStream(ctx context.Context, fullConversation string, emit TextStreamEmitter) (string, error) {
+func CallTextStream(ctx context.Context, fullConversation string, memoryContext string, emit TextStreamEmitter) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -212,6 +245,11 @@ func CallTextStream(ctx context.Context, fullConversation string, emit TextStrea
 	}
 	if err := writer.WriteField("confidence", "0"); err != nil {
 		return "", fmt.Errorf("写入置信度失败: %v", err)
+	}
+	// 历史上下文单独传，不拼进 conversation：
+	// Python 会用 conversation 做知识库检索，拼进去会把检索结果带偏。
+	if err := writer.WriteField("memory_context", memoryContext); err != nil {
+		return "", fmt.Errorf("写入历史上下文失败: %v", err)
 	}
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("关闭 multipart writer 失败: %v", err)
@@ -618,7 +656,9 @@ func CallDeepSeekV3AIStudioAPIStream(fullConversation string, emit TextStreamEmi
 			{Role: "system", Content: skinDoctorSystemPrompt},
 			{Role: "user", Content: fullConversation},
 		},
-		Stream: true, // 开启流式响应
+		Stream:      true, // 开启流式响应
+		Temperature: getEnvFloat("LLM_TEMPERATURE", 0.3),
+		TopP:        getEnvFloat("LLM_TOP_P", 0.9),
 	}
 
 	jsonData, err := json.Marshal(requestBody)
