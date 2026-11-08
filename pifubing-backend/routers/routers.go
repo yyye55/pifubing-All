@@ -35,6 +35,9 @@ func SetupRouter() *gin.Engine {
 	r.GET("/sse", controller.SSEHandler)
 
 	//调用deepseek形成诊疗方案
+	// POST 为推荐方式：问诊数据放 JSON 请求体，避免长知识库文本出现在 URL 里。
+	r.POST("/predict/text", controller.PredictText)
+	// GET 为兼容旧客户端的 base64 方式，新前端不再使用。
 	r.GET("/predict/text", controller.PredictText)
 	//仅文字问诊（不上传图片）
 	r.GET("/predict/only/text", controller.PredictOnlyText)

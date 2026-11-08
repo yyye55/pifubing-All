@@ -2913,21 +2913,55 @@ func buildMemoryContext(ctx context.Context, userID, chatID int, question string
 	return strings.Join(parts, "\n")
 }
 
-func PredictText(c *gin.Context) {
-	base64Data := c.Query("data")
-	if base64Data == "" {
+// maxAskDataBytes 限制问诊请求体大小，避免异常输入占满内存。
+// 正常情况下知识库文本只有几 KB，8MB 足够覆盖。
+const maxAskDataBytes = 8 << 20
+
+// readAskData 同时兼容两种调用方式：
+//  1. 新方式：POST /predict/text，JSON 直接放在请求体里，URL 不再出现 base64；
+//  2. 旧方式：GET /predict/text?data=<base64>，保留给还没更新的客户端。
+//
+// 返回 false 表示已经写好错误响应，调用方直接 return 即可。
+func readAskData(c *gin.Context) ([]byte, bool) {
+	if base64Data := c.Query("data"); base64Data != "" {
+		jsonData, err := base64.StdEncoding.DecodeString(base64Data)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "invalid base64 data"})
+			return nil, false
+		}
+		return jsonData, true
+	}
+	if c.Request.Method != http.MethodPost {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "missing data"})
-		return
+		return nil, false
 	}
-
-	jsonData, err := base64.StdEncoding.DecodeString(base64Data)
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxAskDataBytes+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "invalid base64 data"})
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "read request body failed"})
+		return nil, false
+	}
+	if len(body) > maxAskDataBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": 100, "error": "request body too large"})
+		return nil, false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "missing data"})
+		return nil, false
+	}
+	return body, true
+}
+
+func PredictText(c *gin.Context) {
+	jsonData, ok := readAskData(c)
+	if !ok {
 		return
 	}
 
-	var input AskData
-	if err := json.Unmarshal(jsonData, &input); err != nil {
+	var (
+		err   error
+		input AskData
+	)
+	if err = json.Unmarshal(jsonData, &input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 100, "error": "invalid JSON"})
 		return
 	}

@@ -60,7 +60,7 @@
 1. 前端上传图片到 Go 后端 `POST /users/predict/image`。
 2. Go 后端保存文件，调用 Python `/analyze` 做图片分类与知识库检索。
 3. Python 返回 `prediction`、`confidence`、`result_search`、`desc_search`、`weight`。
-4. 前端携带上述结果连接 Go 后端 `GET /predict/text`（SSE 流式返回）。
+4. 前端携带上述结果 `POST /predict/text`（JSON 请求体，SSE 流式返回）。
 5. Go 后端调用大模型并把完整回答写入数据库，供历史记录查询。
 
 ## 目录结构
@@ -212,7 +212,8 @@ python main.py
 | POST | `/users/login` | 登录，返回 `token` 与 `user_id` |
 | POST | `/users/logout` | 退出登录（token 加入黑名单） |
 | POST | `/users/forget/password` | 重置密码 |
-| GET | `/predict/text` | SSE 流式问答 |
+| POST | `/predict/text` | SSE 流式问答，问诊数据放 JSON 请求体（推荐） |
+| GET | `/predict/text?data=<base64>` | 旧版调用方式，仅为兼容保留 |
 | GET | `/predict/only/text` | 纯文字问诊（需 Bearer Token） |
 | GET | `/sse` | 通用 SSE 测试接口 |
 

@@ -975,28 +975,23 @@ export default {
       }
     },
 
-    // 打开 SSE，把推理过程和最终回答写回同一条 AI 消息
-    startImageStream(aiMessage, requestData, entry) {
-      try {
-        const jsonString = JSON.stringify(requestData);
-        const base64Data = btoa(unescape(encodeURIComponent(jsonString)));
-        const eventSource = new EventSource(
-          `${API_BASE}/predict/text?data=${encodeURIComponent(base64Data)}&model=DeepSeek-R1`
-        );
-        // 连接挂在对话自己的后台记录上，切换对话时不关闭，回答继续接收。
-        entry.eventSource = eventSource;
+    // 打开 SSE，把推理过程和最终回答写回同一条 AI 消息。
+    // 用 POST 发送 JSON：知识库文本放在请求体里，URL 不再出现几 KB 的 base64。
+    async startImageStream(aiMessage, requestData, entry) {
+      // 单条 SSE 事件的处理逻辑，与原来的 EventSource 监听保持一致。
+      const handleEvent = (eventName, rawData) => {
+        if (!rawData) return;
 
-        eventSource.addEventListener('message', (event) => {
-          if (!event.data) return;
-          // Go 端下发的是 {"content":"..."}，EventSource 的 data 是整段 JSON，
-          // 必须取出 content，否则界面会把每个 JSON 对象原样拼进回答。
-          let payload = null;
-          try {
-            payload = JSON.parse(event.data);
-          } catch {
-            payload = null;
-          }
-          const content = typeof payload?.content === 'string' ? payload.content : event.data;
+        let payload = null;
+        try {
+          payload = JSON.parse(rawData);
+        } catch {
+          payload = null;
+        }
+
+        if (eventName === 'message') {
+          // Go 端下发的是 {"content":"..."}，取不到 content 时按纯文本处理。
+          const content = typeof payload?.content === 'string' ? payload.content : rawData;
           if (!content) return;
           aiMessage.thinking = false;
           aiMessage.response += content;
@@ -1004,50 +999,93 @@ export default {
             this.syncChatStreamStatus();
             this.scrollThreadToBottom();
           }
-        });
+          return;
+        }
 
-        eventSource.addEventListener('thoughts', (event) => {
-          if (!event.data) return;
-          // 深度思考同样是 {"thoughts":"..."} 的 JSON 包裹。
-          let payload = null;
-          try {
-            payload = JSON.parse(event.data);
-          } catch {
-            payload = null;
-          }
-          const thoughts = payload?.thoughts || payload?.content || event.data;
+        if (eventName === 'thoughts') {
+          const thoughts = payload?.thoughts || payload?.content || rawData;
           aiMessage.thoughts += thoughts;
           if (this.isCurrentChat(entry.chatId)) this.scrollThreadToBottom();
-        });
+          return;
+        }
 
-        // 图片问答的追问由 Go 在回答结束后单独下发
-        eventSource.addEventListener('suggestions', (event) => {
-          if (!event.data) return;
-          try {
-            const payload = JSON.parse(event.data);
-            aiMessage.suggestions = this.normalizeSuggestions(payload?.suggestions);
-          } catch {
-            aiMessage.suggestions = [];
-          }
+        if (eventName === 'suggestions') {
+          aiMessage.suggestions = this.normalizeSuggestions(payload?.suggestions);
           if (this.isCurrentChat(entry.chatId)) this.scrollThreadToBottom();
-        });
+        }
+      };
 
-        eventSource.addEventListener('error', () => {
-          // 后端流式响应正常结束时也会触发 error；主动 close 防止浏览器自动重连
-          eventSource.close();
-          if (entry.eventSource === eventSource) entry.eventSource = null;
-          aiMessage.thinking = false;
-          if (!aiMessage.response) {
-            aiMessage.error = aiMessage.thoughts
-              ? '本次只返回了推理过程，请重新发送试试。'
-              : 'AI 回复中断，请稍后重试。';
-          }
-          // 有完整回答就算成功；没有内容则按失败保留错误气泡。
-          this.finishBackgroundStream(entry, aiMessage.error ? 'error' : 'done');
-          if (this.isCurrentChat(entry.chatId)) this.scrollThreadToBottom();
+      // 流结束后的收尾：有正文算成功，没有正文则保留错误气泡。
+      const finish = () => {
+        aiMessage.thinking = false;
+        if (!aiMessage.response) {
+          aiMessage.error = aiMessage.thoughts
+            ? '本次只返回了推理过程，请重新发送试试。'
+            : 'AI 回复中断，请稍后重试。';
+        }
+        this.finishBackgroundStream(entry, aiMessage.error ? 'error' : 'done');
+        if (this.isCurrentChat(entry.chatId)) this.scrollThreadToBottom();
+      };
+
+      try {
+        const response = await fetch(`${API_BASE}/predict/text`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify(requestData),
+          signal: entry.controller?.signal,
         });
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE 用空行分隔事件；一次 read 可能只拿到半条事件，必须按缓冲区解析。
+          let boundary = buffer.indexOf('\n\n');
+          while (boundary !== -1) {
+            const rawEvent = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+
+            let eventName = 'message';
+            const dataLines = [];
+            rawEvent.split(/\r?\n/).forEach((line) => {
+              if (line.startsWith('event:')) {
+                eventName = line.slice(6).trim();
+              } else if (line.startsWith('data:')) {
+                dataLines.push(line.slice(5).replace(/^ /, ''));
+              }
+            });
+            if (dataLines.length) handleEvent(eventName, dataLines.join('\n'));
+
+            boundary = buffer.indexOf('\n\n');
+          }
+        }
+
+        finish();
       } catch (error) {
-        this.failPendingMessage(aiMessage, error, entry);
+        // 用户删除对话时会 abort，这是预期行为，不再提示错误。
+        if (entry.cancelled) return;
+        aiMessage.thinking = false;
+        // 已经输出过正文时按成功处理，避免中间断流把整段回答标成失败。
+        if (!aiMessage.response) {
+          aiMessage.error = '抱歉，AI 服务暂时不可用，请稍后再试。';
+        }
+        this.finishBackgroundStream(entry, aiMessage.error ? 'error' : 'done');
+        if (this.isCurrentChat(entry.chatId)) {
+          ElMessage.error('发送失败，请稍后再试');
+          this.scrollThreadToBottom();
+        }
+        console.error('聊天失败:', error);
       }
     },
 
@@ -1378,7 +1416,6 @@ export default {
         aiMessage,
         status: 'streaming',
         controller: new AbortController(),
-        eventSource: null,
         cancelled: false,
         cleanupTimer: null,
         // 刷新后靠轮询后端登记表接回回答进度；正常发送的流不需要轮询。
@@ -1413,7 +1450,6 @@ export default {
       if (!entry) return;
       entry.cancelled = true;
       if (entry.controller) entry.controller.abort();
-      if (entry.eventSource) entry.eventSource.close();
       if (entry.pollTimer) clearTimeout(entry.pollTimer);
       if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
       backgroundStreams.delete(key);
@@ -1524,7 +1560,6 @@ export default {
         aiMessage: this.messages[this.messages.length - 1],
         status: 'streaming',
         controller: null,
-        eventSource: null,
         cancelled: false,
         cleanupTimer: null,
         pollTimer: null,
