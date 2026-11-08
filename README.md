@@ -181,6 +181,14 @@ python main.py
 | `AI_IMAGE_API_URL` | 远程地址 | Python 图片分析接口 |
 | `AI_TEXT_API_URL` | 远程地址 | Python 文字问诊接口 |
 | `API_KEY`、`DeepSeek_R1_STUDIO_API_KEY`、`DeepSeek_V3_STUDIO_API_KEY` | 无 | 大模型密钥 |
+| `VISION_ANSWER_ENABLED` | `true` | 图片问诊时让最终回答模型直接看图；`false` 回到纯文本回答 |
+| `VISION_ANSWER_MODEL` | `glm-4v-plus` | 多模态模型；账号不支持时改成 `glm-4v-flash` |
+| `VISION_API_KEY` | 空 | 留空时依次复用 `LLM_API_KEY` / `DeepSeek_R1_STUDIO_API_KEY` |
+| `VISION_BASE_URL` | 智谱地址 | 多模态接口地址 |
+| `VISION_IMAGE_URL_TTL` | `600` | OSS 签名 URL 有效期（秒） |
+| `VISION_MAX_IMAGES` | `3` | 单次最多传给模型几张图 |
+| `VISION_IMAGE_SOURCE` | `auto` | `auto` 本机有文件优先 base64；`url` 让模型自己下载；`base64` 优先读本地文件 |
+| `VISION_IMAGE_HOSTS` | 空 | 额外允许的图片域名，逗号分隔，支持 `*.example.com` |
 | `SMS_*`、`WECHAT_*` | 无 | 短信、微信登录（可选） |
 
 ### 前端 `pifubing-frontend/.env.development`
@@ -242,6 +250,7 @@ docker compose up -d --build
 - 前端 Nginx 监听 `80`，`/api/` 反向代理到 Go 后端，其余路径回退到 `index.html`。
 - SQLite 数据与上传文件通过 Docker volume 持久化。
 - 生产环境建议将 `STORAGE_MODE` 设为 `oss`，或把 `uploads` 挂载到持久磁盘。
+- 图片问诊的最终回答模型会直接读取图片：`local` 模式默认优先读本机 `./uploads` 转 base64，模型不需要访问公网；`PUBLIC_BASE_URL` 仍要设为浏览器访问站点的公网地址（域名或公网 IP），用于前端显示图片。`oss` 模式在私有 bucket 下会自动生成短时效签名 URL。腾讯云服务器访问阿里云 OSS 只需放行出站 443。
 - 使用 Nginx/Caddy 配置 HTTPS 域名，并把 `PUBLIC_BASE_URL` 改为 `https://你的域名`。
 - 前端构建参数 `VITE_API_BASE=/api` 已在 Compose 中设置。
 
@@ -279,6 +288,15 @@ docker compose up -d --build
 
 **Q：图片问诊报 OSS 错误？**
 本地开发在 `.env` 设置 `STORAGE_MODE=local`，文件会保存到 `pifubing-backend/uploads/` 并通过 `/uploads/...` 访问，不依赖阿里云 OSS。
+
+**Q：只有公网 IP、没有域名，`PUBLIC_BASE_URL` 怎么填？**
+填浏览器实际访问的站点根地址，例如 `http://43.142.39.16`；如果已经配置 HTTPS 域名，就填 `https://你的域名`。不要保留示例值 `https://your-domain.com`，也不要填 `http://localhost`，否则前端图片地址会指向错误位置。
+
+**Q：腾讯云服务器可以使用阿里云 OSS 吗？**
+可以。OSS 是独立的 HTTPS 存储服务，与服务器所在云无关。部署时设置 `STORAGE_MODE=oss`、`OSS_ENDPOINT`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`OSS_BUCKET_NAME`，并确保腾讯云安全组/NAT 允许出站 443。私有 bucket 下后端会为视觉模型生成短时效签名 URL；如果前端也要显示私有图片，需要额外做签名或代理。
+
+**Q：OSS 返回 `InvalidAccessKeyId` / `AccessKey is disabled`？**
+说明当前 AccessKey 已被禁用或删除。请到阿里云 RAM 控制台创建/启用一个只授权该 bucket 的 AccessKey，至少授予 `oss:GetObject`（上传还需要 `oss:PutObject`），然后把新值写入服务器环境变量，不要提交到仓库。
 
 **Q：文字问诊返回“token 已经用完毕，请充值后使用”？**
 大模型 API 余额不足，请更换有效的 `API_KEY` / `DeepSeek_*_STUDIO_API_KEY`。

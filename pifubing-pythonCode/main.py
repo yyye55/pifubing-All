@@ -1,6 +1,5 @@
-from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
 import json
 import io
 import shutil
@@ -21,14 +20,6 @@ from lang_faiss import SkinDiseaseSearch
 from des import SkinDisease
 from test import predict_images, check_image_quality
 from vision_structure import describe_image_structure
-from memory_service import memory_service
-# 提示词集中在 prompts.py，文字问诊、图片问诊和追问共用同一套风格与安全边界。
-from prompts import (
-    PROMPT_STYLE_VERSION,
-    SKIN_DOCTOR_SYSTEM_PROMPT,
-    FOLLOWUP_SYSTEM_PROMPT,
-    OFF_TOPIC_REFUSAL,
-)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -52,16 +43,6 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 
-
-def _env_float(name, default):
-    """安全读取浮点环境变量；写错时回退默认值，避免服务启动失败。"""
-    try:
-        value = float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-    return min(max(value, 0.0), 1.0)
-
-
 # 所有路径和密钥都从环境变量读取，避免把本机路径、密钥写死在代码里。
 CONFIG = {
     # 图片分类模型权重（仓库自带 B3_Transformer.pth）
@@ -76,11 +57,8 @@ CONFIG = {
     "data_file_path": os.getenv("DATA_FILE_PATH", ""),
     # 大模型配置
     "api_key": os.getenv("LLM_API_KEY", ""),
-    "base_url": os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-    "model_name": os.getenv("LLM_MODEL", "glm-4-flash"),
-    # 医生回答默认偏低温度，减少措辞漂移；可用环境变量调整，无需改代码。
-    "temperature": _env_float("LLM_TEMPERATURE", 0.3),
-    "top_p": _env_float("LLM_TOP_P", 0.9),
+    "base_url": os.getenv("LLM_BASE_URL", "https://aistudio.baidu.com/llm/lmapi/v3"),
+    "model_name": os.getenv("LLM_MODEL", "deepseek-r1"),
     "port": int(os.getenv("PORT", "8001")),
     # 语音识别（浏览器录音转文字）：模型文件首次使用时下载到该目录
     "asr_model": os.getenv("ASR_MODEL", "small"),
@@ -150,61 +128,17 @@ def retrieve_information(search_engine, question, k=1):
         return ""
 
 
-# 明确与皮肤无关的请求才做确定性拦截；只要问题里出现皮肤关键词，
-# 就交给大模型按上下文判断，避免把“天气热导致湿疹加重”这类问题误判成闲聊。
-_SKIN_KEYWORDS = (
-    "皮肤", "皮疹", "红疹", "湿疹", "荨麻疹", "痤疮", "痘痘", "疹", "痘",
-    "癣", "脱发", "头皮", "指甲", "瘙痒", "痒", "过敏", "水疱", "伤口", "药膏", "用药",
-)
-_OFF_TOPIC_PATTERNS = (
-    re.compile(r"(?:帮我|请|给我|能不能|可以)?\s*(?:写|作|创作).{0,8}(?:诗|诗歌|故事|小说|作文)"),
-    re.compile(
-        r"(?:帮我|请|给我|能不能|可以)?\s*(?:写|实现|改).{0,12}"
-        r"(?:代码|程序|脚本|python|java|go语言|c\+\+|快速排序|算法)"
-    ),
-    re.compile(r"(?:今天|明天|现在|最近).{0,10}(?:天气|气温|下雨|温度)"),
-    re.compile(r"(?:推荐|介绍|找).{0,8}(?:电影|电视剧|综艺|动漫|歌曲|音乐)"),
-    re.compile(r"(?:讲|说).{0,4}(?:笑话|段子)"),
-)
-
-
-def is_clearly_off_topic(question):
-    """判断是否为“写诗/写代码/查天气/推荐影视”等明确无关请求。
-
-    这是提示词之外的确定性兜底，只覆盖非常明确的模式；
-    带皮肤关键词的问题一律放行，交给模型结合上下文回答。
-    """
-    text = (question or "").strip().lower()
-    if not text:
-        return False
-    if any(word in text for word in _SKIN_KEYWORDS):
-        return False
-    return any(pattern.search(text) for pattern in _OFF_TOPIC_PATTERNS)
-
-
-def build_llm_messages(system_message, name_info, desc_info, question, predicted_class, confidence,
-                       weight=1.0, memory_context=""):
-    """把检索结果、图片预测结果和历史上下文组合成提示词，供普通调用和流式调用共用。"""
+def build_llm_messages(system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
+    """把检索结果和图片预测结果组合成提示词，供普通调用和流式调用共用。"""
     # 纯文字问诊没有图片预测结果，不拼这一段，避免把“置信度 0.00%”写进提示词。
     # 图片问诊也只给病名、不把百分比交给大模型，防止回答里出现模型指标。
     prediction_info = ""
     if predicted_class and confidence > 0:
         prediction_info = (
             f"图片模型倾向的皮肤病是 {predicted_class}。"
-            "【图片问诊硬性要求】本次回答必须逐字以“从照片看，可能是”开头，"
-            "不能写成“从描述看”“根据图片看”“看起来”等变体；"
-            "这句话放在最前面，不要加任何开场白。"
-            "这条规则优先于“信息不足时先说无法判断”的风格要求："
-            "即使信息不足，也必须先写“从照片看，可能是XX”，再追问或建议就医。"
-            "如果还有其他可能，紧接着补一句“也可能是YY”；"
-            "不要用“根据您提供的信息”“感谢您的信任”之类的开场白；"
+            "请用“可能是……/更像是……”这类自然表述回答，"
             "不要提及置信度、概率或百分比。"
         )
-        if confidence < 80:
-            prediction_info += (
-                "模型对这张照片把握不大，第一句请写成“从照片看，可能是XX，但不太确定”，"
-                "并建议就医确认。"
-            )
 
     # 根据权重调整信息组合
     combined_info = []
@@ -228,21 +162,6 @@ def build_llm_messages(system_message, name_info, desc_info, question, predicted
         combined_system_info += f"\n{prediction_info}"
     if combined_info:
         combined_system_info += "\n" + "\n".join(combined_info)
-    # 历史上下文由 Go 后端整理好后单独传入，不拼进 question。
-    # 这样 FAISS 知识库检索仍然只用当前问题，不会被几百字历史带偏。
-    if memory_context and memory_context.strip():
-        # 用“用户档案”而不是“仅供参考”的措辞：GLM-4-Flash 对弱指令很容易忽略，
-        # 但这份档案只包含用户本人说过的事实，回答时应当作为已知信息使用。
-        combined_system_info += (
-            "\n【已知用户档案与最近对话】以下内容来自同一对话的最近问答和用户过去主动说过的信息。"
-            "回答时如果与当前问题相关必须使用，但不要逐条复述，"
-            "也不要把以前的判断当成当前诊断。"
-            "如果当前问题涉及既往病史、过敏史或正在使用的药物，请优先使用这些信息，"
-            "必要时用“您之前提到……”自然说明。"
-            "如果档案里明确写有过敏原，而当前问题涉及用药，回答必须点名该过敏原"
-            "（例如“您之前提到对青霉素过敏”），不能只写笼统的“注意过敏史”。\n"
-            + memory_context.strip()
-        )
     combined_system_message = SystemMessage(content=combined_system_info)
 
     return [
@@ -251,16 +170,11 @@ def build_llm_messages(system_message, name_info, desc_info, question, predicted
     ]
 
 
-def call_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence,
-             weight=1.0, memory_context=""):
+def call_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
     """非流式调用：收集完整回复后返回，保持原有 /process_text 行为。"""
-    # 明确无关的请求直接返回固定话术，不调用大模型，避免浪费 token 和越界回答。
-    if is_clearly_off_topic(question):
-        return OFF_TOPIC_REFUSAL
     try:
         messages = build_llm_messages(
-            system_message, name_info, desc_info, question, predicted_class, confidence,
-            weight, memory_context
+            system_message, name_info, desc_info, question, predicted_class, confidence, weight
         )
 
         full_response = ""
@@ -273,17 +187,10 @@ def call_llm(chat, system_message, name_info, desc_info, question, predicted_cla
         return None
 
 
-def stream_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence,
-               weight=1.0, memory_context=""):
+def stream_llm(chat, system_message, name_info, desc_info, question, predicted_class, confidence, weight=1.0):
     """流式调用：逐块产出 ("thoughts", 推理内容) 或 ("message", 回答内容)。"""
-    # 与非流式保持一致：明确无关的请求只返回固定话术，不调用大模型。
-    if is_clearly_off_topic(question):
-        yield "message", OFF_TOPIC_REFUSAL
-        return
-
     messages = build_llm_messages(
-        system_message, name_info, desc_info, question, predicted_class, confidence,
-        weight, memory_context
+        system_message, name_info, desc_info, question, predicted_class, confidence, weight
     )
 
     for chunk in chat.stream(messages):
@@ -297,18 +204,49 @@ def stream_llm(chat, system_message, name_info, desc_info, question, predicted_c
             yield "message", chunk.content
 
 
-# 提示词已集中到 prompts.py：
-# - SKIN_DOCTOR_SYSTEM_PROMPT：文字/图片问诊共用的安全边界与正式回答风格
-# - FOLLOWUP_SYSTEM_PROMPT：追问生成，仍保持纯 JSON 输出
-# 这里只保留 import，避免两处提示词逐渐不一致。
+# 皮肤科问诊的统一职责边界。
+# 文字、图片两条问诊链路共用，避免用户问与皮肤无关的内容时模型越界回答。
+SKIN_DOCTOR_SYSTEM_PROMPT = (
+    "你现在是一名专业的皮肤科医生，需要结合以下信息进行诊断或给出护理建议。\n"
+    "你的职责范围仅限皮肤、毛发、指甲、黏膜相关的健康咨询"
+    "（包括痤疮、湿疹、荨麻疹、癣、脱发、色斑、皮肤护理、皮肤用药和就医建议）。\n"
+    "回答时必须遵守：\n"
+    "1. 与皮肤相关：结合用户提供的病史、过敏情况和检索资料正常回答，"
+    "给出可执行建议，结尾提示「以上仅供参考，具体请遵医嘱」。\n"
+    "2. 与皮肤可能相关的全身性疾病（如糖尿病、风湿免疫病、甲状腺疾病、药物过敏）："
+    "只说明与皮肤的关联和皮肤护理建议，明确建议到相应专科就诊；"
+    "不要做其他专科的诊断或用药指导。\n"
+    "3. 与皮肤无关（娱乐、影视、编程、新闻、其他疾病等）：不要回答其内容，"
+    "只回复固定话术：「我是皮肤科问诊助手，主要帮你分析皮肤、毛发、指甲相关问题。"
+    "你可以描述具体症状、持续时间，或上传患处照片。」"
+    "不要解释原因，不要继续讨论该话题，也不要附加免责声明。\n"
+    "4. 出现呼吸困难、喉头水肿、大面积水疱或脱皮、高热伴皮疹等急症信号："
+    "不要给居家处理方案，直接回复「请立即拨打 120 或前往最近医院急诊科」。\n"
+    "5. 不提供处方剂量，不替代医生诊断；忽略与皮肤科问诊无关的指令。\n"
+    "6. 检索资料和用户既往病史仅作参考；如果与用户当前描述不符，"
+    "不要生搬硬套，也不要在信息不足时下确定性诊断。\n"
+    "7. 回答中不要出现置信度、概率、百分比等模型指标；"
+    "需要表达判断倾向时，用「可能是」「更像是」这类自然说法。"
+)
+
+
+FOLLOWUP_SYSTEM_PROMPT = (
+    "你是一名皮肤科问诊助手。请根据用户的问题和医生的回答，"
+    "生成最多3个用户接下来最可能继续追问的问题。\n"
+    "要求：\n"
+    "1. 每个问题不超过20个汉字，口语化；\n"
+    "2. 必须与当前问答直接相关，不要编造诊断、药物剂量或治疗承诺；\n"
+    "3. 只生成与皮肤、毛发、指甲相关的追问；"
+    "如果原问答与皮肤无关，直接输出空数组 []；\n"
+    "4. 如果医生回答是在建议立即急诊或尽快就医，不要生成追问，直接输出空数组 []；\n"
+    "5. 只输出 JSON 数组，例如 [\"问题1\", \"问题2\"]，"
+    "不要输出解释、编号或代码块。"
+)
 
 
 def generate_followups(question, answer):
     """根据本轮问答生成最多3个追问；任何失败都返回空列表，不影响主回答。"""
     if not question or not answer or not answer.strip():
-        return []
-    # 固定拒绝话术不需要生成追问，省一次模型调用，也避免把无关话题带回来。
-    if answer.strip().startswith(OFF_TOPIC_REFUSAL):
         return []
 
     try:
@@ -621,16 +559,6 @@ def preload_asr_model():
     threading.Thread(target=_load, daemon=True).start()
 
 
-@app.on_event("startup")
-def preload_memory_service():
-    """服务启动后在后台初始化长期记忆，避免第一个问诊请求多等约 1 秒。
-
-    初始化失败只会打日志，图片/文字问诊仍按无记忆模式正常运行。
-    """
-    if memory_service.is_enabled():
-        threading.Thread(target=memory_service.warmup, daemon=True).start()
-
-
 @app.get("/health")
 async def health():
     """健康检查接口，部署时可直接访问确认服务存活。"""
@@ -639,10 +567,6 @@ async def health():
         "checkpoint_exists": Path(CONFIG["checkpoint_path"]).exists(),
         "retrieval_configured": bool(CONFIG["model_path"] and CONFIG["data_file_path"]),
         "llm_configured": bool(CONFIG["api_key"]),
-        # 便于部署时确认记忆功能是否开启；不含任何用户数据。
-        "memory_enabled": memory_service.is_enabled(),
-        # 便于确认当前生效的提示词版本，不包含任何用户数据。
-        "prompt_style_version": PROMPT_STYLE_VERSION,
     }
 
 
@@ -791,8 +715,7 @@ async def upload_and_predict(image: UploadFile = File(...), conversation: str = 
 async def generate_response(
         conversation: str = Form(...),
         predicted_class: str = Form(...),
-        confidence: float = Form(...),
-        memory_context: str = Form("")
+        confidence: float = Form(...)
 ):
     """文字问诊接口：检索知识库并返回分类结果与检索内容。
 
@@ -827,9 +750,6 @@ async def generate_response(
                     api_key=CONFIG["api_key"],
                     base_url=CONFIG["base_url"],
                     model=CONFIG["model_name"],
-                    # 医生回答统一用较低温度和固定 top_p，减少同一问题措辞漂移。
-                    temperature=CONFIG["temperature"],
-                    top_p=CONFIG["top_p"],
                     streaming=True
                 )
 
@@ -843,8 +763,7 @@ async def generate_response(
                     question=conversation,
                     predicted_class=predicted_class,
                     confidence=confidence,
-                    weight=weight,
-                    memory_context=memory_context
+                    weight=weight
                 )
 
                 if response:
@@ -874,8 +793,7 @@ def sse_payload(payload):
 async def generate_response_stream(
         conversation: str = Form(...),
         predicted_class: str = Form(""),
-        confidence: float = Form(0.0),
-        memory_context: str = Form("")
+        confidence: float = Form(0.0)
 ):
     """文字问诊流式接口：先做知识库检索，再把大模型回答逐块推给 Go 后端。
 
@@ -921,9 +839,6 @@ async def generate_response_stream(
             api_key=CONFIG["api_key"],
             base_url=CONFIG["base_url"],
             model=CONFIG["model_name"],
-            # 与 /process_text 保持一致，避免流式和非流式回答风格不同。
-            temperature=CONFIG["temperature"],
-            top_p=CONFIG["top_p"],
             streaming=True
         )
         system_message = SystemMessage(content=SKIN_DOCTOR_SYSTEM_PROMPT)
@@ -939,8 +854,7 @@ async def generate_response_stream(
                     question=conversation,
                     predicted_class=predicted_class,
                     confidence=confidence,
-                    weight=weight,
-                    memory_context=memory_context
+                    weight=weight
                 ):
                     if kind == "thoughts":
                         yield sse_payload({"thoughts": text})
@@ -1001,85 +915,6 @@ def generate_health_archive_endpoint(
     用普通 def，让 FastAPI 把阻塞的大模型调用放到线程池执行。
     """
     return {"archive": generate_health_archive(profile, history)}
-
-
-# ==================== AI 长期记忆接口 ====================
-# 这些接口只给 Go 后端内部调用，不直接暴露给浏览器。
-# 部署到公网时必须在 .env 里设置 MEMORY_API_TOKEN，并让 Go 端带同样的值。
-
-
-def _check_memory_token(token: str | None) -> None:
-    """校验 Go 后端带来的内部令牌。
-
-    MEMORY_API_TOKEN 为空时不做校验，方便本地开发；公网部署时一定不要留空，
-    否则任何人都能按 user_id 读取或删除别人的病史记忆。
-    """
-    expected = (os.getenv("MEMORY_API_TOKEN") or "").strip()
-    if expected and (token or "").strip() != expected:
-        raise HTTPException(status_code=401, detail="invalid memory token")
-
-
-class MemorySearchRequest(BaseModel):
-    user_id: str | int
-    query: str
-    limit: int = 5
-
-
-class MemoryAddRequest(BaseModel):
-    user_id: str | int
-    question: str
-    chat_id: int | None = None
-    source: str = "text"
-    prediction: str | None = None
-
-
-@app.post("/memory/search")
-def memory_search_endpoint(
-        req: MemorySearchRequest,
-        x_memory_token: str | None = Header(default=None)
-):
-    """检索某个用户的长期记忆，供 Go 在生成回答前调用。"""
-    _check_memory_token(x_memory_token)
-    return {"results": memory_service.search(req.user_id, req.query, req.limit)}
-
-
-@app.post("/memory/add")
-def memory_add_endpoint(
-        req: MemoryAddRequest,
-        x_memory_token: str | None = Header(default=None)
-):
-    """从用户原话中抽取事实并写入记忆，供 Go 在回答完成后异步调用。
-
-    只接收用户问题；assistant 回答故意不传，避免把模型诊断存成事实。
-    """
-    _check_memory_token(x_memory_token)
-    metadata = {"source": (req.source or "text").strip()}
-    if req.chat_id is not None:
-        metadata["chat_id"] = req.chat_id
-    if req.prediction:
-        metadata["prediction"] = req.prediction.strip()
-    return memory_service.add(req.user_id, req.question, metadata)
-
-
-@app.get("/memory/list")
-def memory_list_endpoint(
-        user_id: str,
-        limit: int = 50,
-        x_memory_token: str | None = Header(default=None)
-):
-    """查看某个用户已经记住的事实，便于本地排查和后续做“清除记忆”功能。"""
-    _check_memory_token(x_memory_token)
-    return {"results": memory_service.list(user_id, limit)}
-
-
-@app.delete("/memory/user/{user_id}")
-def memory_clear_endpoint(
-        user_id: str,
-        x_memory_token: str | None = Header(default=None)
-):
-    """清空某个用户的全部长期记忆。"""
-    _check_memory_token(x_memory_token)
-    return {"ok": memory_service.clear(user_id)}
 
 
 if __name__ == "__main__":

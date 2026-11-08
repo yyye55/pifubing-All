@@ -2999,6 +2999,10 @@ func PredictText(c *gin.Context) {
 		input.Conversation,
 	)
 
+	// 图片问诊优先让最终回答模型直接看图。
+	// URL 解析失败、视觉接口不可用或未开启时，会自动回退到下面的纯文本链路。
+	visionImageURLs := prepareVisionImageURLs(input.Url)
+
 	// 图片问诊的预测信息也登记下来，刷新后气泡上方的预测结果和结构描述可以恢复。
 	// 和前端保持一致：只展示“可能是某个病名”，不展示置信度百分比。
 	metaPrediction := strings.TrimSpace(input.Prediction)
@@ -3049,21 +3053,59 @@ func PredictText(c *gin.Context) {
 	}
 
 	var fullResponseText string
-	if input.Model == "DeepSeek-R1" {
-		// **调用DeepSeek-R1流式 API 并获取完整回复**
-		fullResponseText, err = utils.CallDeepSeekR1AIStudioAPIStream(fullConversation, emit)
-		if err != nil {
-			live.finish("error", err.Error(), nil)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+	usedVision := false
+	if len(visionImageURLs) > 0 && visionAnswerEnabled() {
+		// 真正把图片传给最终回答模型：图片在前，问题、分类器提示和知识库在后。
+		visionConversation := buildVisionConversation(input, candidateText, structureText, memoryBlock, len(visionImageURLs))
+		fullResponseText, err = utils.CallVisionModelStream(visionImageURLs, visionConversation, emit)
+		if err == nil {
+			usedVision = true
+		} else {
+			log.Printf("图片视觉回答失败（图片 %d 张），回退纯文本链路: %v", len(visionImageURLs), err)
+			// 已经输出过内容时不能再走一遍文字链路，否则前端会出现两段回答。
+			if strings.TrimSpace(fullResponseText) != "" {
+				live.finish("error", "回答生成中断，请重试", nil)
+				return
+			}
+			fullResponseText = ""
+			// 多图失败时用第一张再试一次；部分视觉模型不支持一次传多图。
+			if len(visionImageURLs) > 1 {
+				fullResponseText, err = utils.CallVisionModelStream(visionImageURLs[:1], visionConversation, emit)
+				if err == nil {
+					usedVision = true
+				} else {
+					log.Printf("单图视觉回答仍失败，回退纯文本链路: %v", err)
+					if strings.TrimSpace(fullResponseText) != "" {
+						live.finish("error", "回答生成中断，请重试", nil)
+						return
+					}
+					fullResponseText = ""
+				}
+			}
 		}
+	} else if len(visionImageURLs) > 0 {
+		log.Printf("图片问答：VISION_ANSWER_ENABLED=false，使用纯文本链路")
 	} else {
-		// **调用DeepSeek-V3流式 API 并获取完整回复**
-		fullResponseText, err = utils.CallDeepSeekV3AIStudioAPIStream(fullConversation, emit)
-		if err != nil {
-			live.finish("error", err.Error(), nil)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		log.Printf("图片问答：没有可用的图片 URL，使用纯文本链路")
+	}
+
+	if !usedVision {
+		if input.Model == "DeepSeek-R1" {
+			// **调用DeepSeek-R1流式 API 并获取完整回复**
+			fullResponseText, err = utils.CallDeepSeekR1AIStudioAPIStream(fullConversation, emit)
+			if err != nil {
+				live.finish("error", err.Error(), nil)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else {
+			// **调用DeepSeek-V3流式 API 并获取完整回复**
+			fullResponseText, err = utils.CallDeepSeekV3AIStudioAPIStream(fullConversation, emit)
+			if err != nil {
+				live.finish("error", err.Error(), nil)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
 	}
 

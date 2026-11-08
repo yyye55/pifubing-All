@@ -11,10 +11,23 @@ services:
       AUTO_MIGRATE: "true"
       USE_MEMORY_REDIS: "true"
       JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
-      STORAGE_MODE: local
+      # local：保存到容器 ./uploads；oss：上传阿里云 OSS。
+      STORAGE_MODE: ${STORAGE_MODE:-local}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
       AI_IMAGE_API_URL: ${AI_IMAGE_API_URL:-http://ai:8001/analyze}
       AI_TEXT_API_URL: ${AI_TEXT_API_URL:-http://ai:8001/process_text}
+      # 图片问诊：最终回答模型直接看图。
+      # VISION_API_KEY 留空时依次复用 LLM_API_KEY / DeepSeek_R1_STUDIO_API_KEY。
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      VISION_ANSWER_ENABLED: ${VISION_ANSWER_ENABLED:-true}
+      VISION_ANSWER_MODEL: ${VISION_ANSWER_MODEL:-glm-4v-plus}
+      VISION_API_KEY: ${VISION_API_KEY:-}
+      VISION_BASE_URL: ${VISION_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      VISION_IMAGE_URL_TTL: ${VISION_IMAGE_URL_TTL:-600}
+      VISION_MAX_IMAGES: ${VISION_MAX_IMAGES:-3}
+      VISION_IMAGE_SOURCE: ${VISION_IMAGE_SOURCE:-auto}
+      VISION_IMAGE_HOSTS: ${VISION_IMAGE_HOSTS:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       SMTP_HOST: ${SMTP_HOST:-smtp.qq.com}
