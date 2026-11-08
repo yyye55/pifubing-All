@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"io"
+	"log"
 	"math/rand"
 	"mime/multipart"
 	"net/http"
@@ -365,23 +366,31 @@ func GenerateFollowups(ctx context.Context, question, answer string) []string {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &body)
 	if err != nil {
+		log.Printf("生成追问失败：创建请求出错: %v", err)
 		return nil
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	// 必须比 Python 内部调用大模型的 timeout（12 秒）长，
+	// 否则 Go 会先放弃，表现就是追问时有时无。
+	client := &http.Client{Timeout: 15 * time.Second}
+	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("生成追问失败：请求 %s 出错（耗时 %s）: %v",
+			apiURL, time.Since(start).Round(time.Millisecond), err)
 		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("生成追问失败：接口返回状态码 %d", resp.StatusCode)
 		return nil
 	}
 
 	var payload followupPayload
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		log.Printf("生成追问失败：解析响应出错: %v", err)
 		return nil
 	}
 
@@ -395,6 +404,11 @@ func GenerateFollowups(ctx context.Context, question, answer string) []string {
 		if len(suggestions) == 3 {
 			break
 		}
+	}
+	if len(suggestions) == 0 {
+		// 空结果是正常情况之一：急诊建议或非皮肤问题会按提示词返回 []。
+		// 记录下来便于区分“主动不生成”和“模型/接口异常”。
+		log.Printf("生成追问：本轮没有可用的追问")
 	}
 	return suggestions
 }
