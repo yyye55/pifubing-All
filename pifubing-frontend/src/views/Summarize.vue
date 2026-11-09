@@ -365,11 +365,12 @@ onBeforeUnmount(() => {
 
         <el-form :model="formData" label-position="top" class="profile-form">
           <div class="form-grid">
+            <!-- 账号和邮箱是登录凭证，任何状态下都不允许在个人中心修改 -->
             <el-form-item label="账号">
-              <el-input v-model="formData.account" :disabled="!isEditable" placeholder="请输入账号" />
+              <el-input v-model="formData.account" disabled placeholder="请输入账号" />
             </el-form-item>
             <el-form-item label="邮箱">
-              <el-input v-model="formData.email" :disabled="!isEditable" placeholder="请输入邮箱" />
+              <el-input v-model="formData.email" disabled placeholder="请输入邮箱" />
             </el-form-item>
             <el-form-item label="姓名">
               <el-input v-model="formData.name" :disabled="!isEditable" placeholder="请输入姓名" />

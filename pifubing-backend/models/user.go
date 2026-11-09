@@ -48,8 +48,11 @@ func (Disease_information) TableName() string {
 }
 
 func Update_disease_information(db *gorm.DB, disease_information *Disease_information, id int) error {
-	// 根据 id 查找用户并更新其病史和过敏信息
-	if err := db.Where("id = ?", id).Updates(disease_information).Error; err != nil {
+	// 显式 Select，保证用户把病史、过敏史清空后能真正保存为空值。
+	if err := db.Model(&Disease_information{}).
+		Where("id = ?", id).
+		Select("medical_history", "allergies").
+		Updates(disease_information).Error; err != nil {
 		return err
 	}
 	return nil
@@ -69,8 +72,12 @@ func (Users_information) TableName() string {
 }
 
 func Update_users_information(db *gorm.DB, users_information *Users_information, id int) error {
-	// 根据 id 查找用户并更新其病史和过敏信息
-	if err := db.Where("id = ?", id).Updates(users_information).Error; err != nil {
+	// 账号和邮箱是登录凭证，个人中心不再允许修改，这里也不写回；
+	// 其余字段显式 Select，保证用户清空后能真正保存为空值。
+	if err := db.Model(&Users_information{}).
+		Where("id = ?", id).
+		Select("name", "age", "gender", "phone_number").
+		Updates(users_information).Error; err != nil {
 		return err
 	}
 	return nil
